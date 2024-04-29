@@ -57,3 +57,8 @@ wandb/
 artifacts/
 logs/
 runs/
+
+# file types
+*.pth
+*.png
+*.jpg

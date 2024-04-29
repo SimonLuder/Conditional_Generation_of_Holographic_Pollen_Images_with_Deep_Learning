@@ -11,14 +11,7 @@ from torch.utils.data import DataLoader
 
 import clip
 
-from dataset import ImageSentenceDataset, ImageTabularDataset, ImageImageDataset
-
-
-# def setup(args):
-#     os.makedirs("models", exist_ok=True)
-#     os.makedirs("results", exist_ok=True)
-#     os.makedirs(os.path.join("models", args.run_name), exist_ok=True)
-#     os.makedirs(os.path.join("results", args.run_name), exist_ok=True)
+from dataset import ImageClassDataset, ImageSentenceDataset, ImageTabularDataset, ImageImageDataset
 
 
 def resume_from_checkpoint():
@@ -74,11 +67,12 @@ def get_dataloader(args):
         print("Loading ImageFolder")
 
         if vars(args).get("train_images"):
-            train_dataset = torchvision.datasets.ImageFolder(root=args.train_images, transform=transforms)
+            print(args.train_images)
+            train_dataset = ImageClassDataset(root=args.train_images, transform=transforms)
         if vars(args).get("val_images"):
-            val_dataset   = torchvision.datasets.ImageFolder(root=args.val_images, transform=transforms)
+            val_dataset   = ImageClassDataset(root=args.val_images, transform=transforms)
         if vars(args).get("test_images"):
-            test_dataset  = torchvision.datasets.ImageFolder(root=args.test_images, transform=transforms)
+            test_dataset  = ImageClassDataset(root=args.test_images, transform=transforms)
 
     if args.cfg_encoding == "tabular":
         
@@ -150,14 +144,14 @@ def yaml_load_config(config_path):
             config = yaml.safe_load(file)
         return config
     
-def save_as_json(data_dict, filepath):
+def save_json(data_dict, filepath):
     path, _ = os.path.split(filepath)
     Path(path).mkdir( parents=True, exist_ok=True )
     with open(filepath, "w") as file:
         json.dump(data_dict, file)
 
 
-def load_from_json(filepath):
+def load_json(filepath):
     with open(filepath, "r") as file:
         data_dict = json.load(file)
     return data_dict

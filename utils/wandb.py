@@ -3,10 +3,10 @@ import numpy as np
 
 
 class WandbManager:
-    def __init__(self, config):
+    def __init__(self, project, run_name, config):
         self.config = config
-        self.run = wandb.init(project=self.config['project'], 
-                              name=self.config['run_name'], 
+        self.run = wandb.init(project=project, 
+                              name=run_name, 
                               config=self.config)
     
     def get_run(self):

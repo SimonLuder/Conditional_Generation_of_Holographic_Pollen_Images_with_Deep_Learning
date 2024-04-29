@@ -80,7 +80,7 @@ class EMA:
 #         attention_value = attention_value.swapaxes(1, 2).view(B, -1, self.size, self.size)
 #         print("out", attention_value.shape)
 #         return attention_value
-    
+
 
 class SelfAttention(nn.Module):
     def __init__(self, channels):

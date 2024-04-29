@@ -1,7 +1,30 @@
+import os
 import torch
 import numpy as np
 import pandas as pd
 from PIL import Image
+from torchvision.datasets import ImageFolder
+from typing import Any, Tuple
+
+
+class ImageClassDataset(ImageFolder):
+    
+    def __getitem__(self, index: int) -> Tuple[Any, Any, Any]:
+        """
+        Args:
+            index (int): Index
+
+        Returns:
+            tuple: (sample, target, path) where target is class_index of the target class.
+        """
+        path, target = self.samples[index]
+        sample = self.loader(path)
+        if self.transform is not None:
+            sample = self.transform(sample)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return sample, target, path
 
 
 class ImageSentenceDataset(torch.utils.data.Dataset):
@@ -68,6 +91,7 @@ class ImageTabularDataset(torch.utils.data.Dataset):
             image = self.transform(image)
         return image, caption, filename
     
+
 class ImageImageDataset(torch.utils.data.Dataset):
     """
     A PyTorch Dataset class to be used in a PyTorch DataLoader to create batches of Images as tensor and Images raw.
@@ -100,3 +124,30 @@ class ImageImageDataset(torch.utils.data.Dataset):
             
         return image, condition, filename
     
+
+class HolographyImageFolder(torch.utils.data.Dataset):
+    
+    def __init__(self, root, transform=None):
+        self.root_dir = root
+        self.transform = transform
+
+        self.samples = []
+        for dirpath, dirnames, filenames in os.walk(self.root_dir):
+            for filename in filenames:
+                if filename.endswith(('.png', '.jpg', '.jpeg')):  # add more extensions as needed
+                    img_path = os.path.join(dirpath, filename)
+                    folder_name = os.path.basename(os.path.dirname(img_path))
+                    self.samples.append((img_path, folder_name, filename))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        img_path, folder_name, filename = self.samples[idx]
+        img = Image.open(img_path)
+        if img.mode == 'I':
+            img = img.convert('I;16')
+        img = (np.array(img) / 256).astype('uint8')
+        if self.transform:
+            img = self.transform(img)
+        return img, folder_name, filename

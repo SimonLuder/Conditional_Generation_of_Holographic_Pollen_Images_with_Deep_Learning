@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import lpips
+import shutil
 import random
 import argparse
 import numpy as np
@@ -44,8 +45,14 @@ def train(config_path):
     Path(os.path.join(train_config["task_name"], train_config['vqvae_discriminator_ckpt_name'])).mkdir( parents=True, exist_ok=True)
     Path(os.path.join(train_config["task_name"], 'vqvae_autoencoder_samples')).mkdir( parents=True, exist_ok=True)
 
+    # copy config to checkpoint folder
+    shutil.copyfile(config_path, 
+                    os.path.join(train_config['task_name'], 
+                                 train_config['ldm_ckpt_name'], 
+                                 os.path.basename(config_path)))
+
     # setup WandbManager
-    wandb_manager = WandbManager(project="MSE_P8", run_name=config["train_params"] + "_vqvae", config=config)
+    wandb_manager = WandbManager(project="MSE_P8", run_name=train_config['vqvae_autoencoder_ckpt_name'] + "_vqvae", config=config)
     # init run
     wandb_run = wandb_manager.get_run()
 
@@ -73,7 +80,9 @@ def train(config_path):
     transforms = torchvision.transforms.Compose(transforms_list)
 
     #dataset
-    dataset = HolographyImageFolder(root=dataset_config["img_path"], transform=transforms)
+    dataset = HolographyImageFolder(root=dataset_config["img_path"], 
+                                    transform=transforms, 
+                                    pkl_path=dataset_config.get("pkl_path_train"))
 
     # dataloader
     dataloader = DataLoader(dataset,
@@ -87,7 +96,7 @@ def train(config_path):
     loss_functions = {"MSELoss" : nn.MSELoss,
                       "BCEWithLogits" : nn.BCEWithLogitsLoss,
                       }.get(train_config["discriminator_loss"])
-    discriminator_loss = loss_functions(train_config['discriminator_loss'])
+    discriminator_loss = loss_functions()
 
     # VAE model
     model = VQVAE(img_channels=dataset_config["img_channels"], 
@@ -284,7 +293,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Arguments for ldm training')
     parser.add_argument('--config', dest='config_path',
-                        default='config/vae_config.yaml', type=str)
+                        default='config/ldm_config.yaml', type=str)
     args = parser.parse_args()
 
     train(args.config_path)

@@ -24,11 +24,12 @@ sys.path.append(parent_dir)
 
 from model.vqvae import VQVAE
 from utils.config import load_config
-from utils.train_test_utils import save_json, load_json
 from utils.wandb import WandbManager
 # from model.lpips import LPIPS
 from model.discriminator import PatchGanDiscriminator
 from dataset import HolographyImageFolder
+from tools.vqvae_validate import validate
+from utils.train_test_utils import load_json, save_json
 
 
 def train(config_path):
@@ -224,12 +225,20 @@ def train(config_path):
                 if (step_count % steps_per_optimization == 0) or (step_count == (len(dataloader) - 1)):
                     optimizer_d.step()
                     optimizer_d.zero_grad()
-            
             ##############################################################################
+
+            ################################# validation #################################
+            logs_val = None
+            if step_count % train_config["autoencoder_val_steps"] == 0:
+                logs_val = validate(model, config_path)
+            #############################################################################
+
+            step_count += 1
+            pbar.set_postfix(g_loss=g_loss.item())
 
             ################################### logging ##################################
             logs = {"epoch" :               epoch_idx + 1,
-                    "step" :                step_count + 1,
+                    "step" :                step_count,
                     "reconstruction_loss" : rec_loss,
                     "lpips_loss" :          lpips_loss,
                     "codebook_loss" :       quantize_losses["codebook_loss"],
@@ -239,6 +248,9 @@ def train(config_path):
             if len(d_losses) > 0:
                 logs["d_loss"] = d_loss
 
+            if logs_val is not None:
+                logs.update(logs_val)
+
             # wandb logging
             wandb_run.log(data=logs)
 
@@ -246,9 +258,6 @@ def train(config_path):
             # train_logs.append(logs)
             # save_json(train_logs, train_config["logs"])
             ##############################################################################
-
-            step_count += 1
-            pbar.set_postfix(g_loss=g_loss.item())
 
             ################################ model saving ################################
             if step_count % train_config["autoencoder_ckpt_steps"] == 0:
@@ -287,7 +296,12 @@ def train(config_path):
         
         # wandb logging
         wandb_run.log(data=logs)
+
+        # train_logs = load_json(train_config["logs"])
+        # train_logs.append(logs)
+        # save_json(train_logs, train_config["logs"])
         ##############################################################################
+
             
 if __name__ == "__main__":
 

@@ -152,6 +152,9 @@ def save_json(data_dict, filepath):
 
 
 def load_json(filepath):
-    with open(filepath, "r") as file:
-        data_dict = json.load(file)
-    return data_dict
+    if os.path.exists(filepath):
+        with open(filepath, "r") as file:
+            data_dict = json.load(file)
+        return data_dict
+    else:
+        return []

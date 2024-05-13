@@ -98,7 +98,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Arguments for vqvae inference')
     parser.add_argument('--config', dest='config_path',
-                        default='config/vae_config.yaml', type=str)
+                        default='config/ldm_config.yaml', type=str)
     args = parser.parse_args()
 
     inference(args.config_path)

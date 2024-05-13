@@ -5,9 +5,10 @@ def load_config(config_file):
     with open(config_file, 'r') as stream:
         try:
             config = yaml.safe_load(stream)
+            return config
         except yaml.YAMLError as exc:
             print(exc)
-    return config
+    
 
 def update_config(config:dict, args: dict):
     config.update(args)

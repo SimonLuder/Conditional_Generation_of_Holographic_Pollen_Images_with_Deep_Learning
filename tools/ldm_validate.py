@@ -1,0 +1,171 @@
+import os
+import sys
+import time
+import argparse
+import numpy as np
+from tqdm import tqdm
+
+import torch
+import torch.nn
+import torch.nn.functional as F
+from torch.optim import Adam
+from torch.utils.data import DataLoader
+import torchvision
+from torchvision.utils import make_grid
+
+# add parent dir to path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir) 
+sys.path.append(parent_dir)
+
+from model.unet_v2 import UNet
+from model.vqvae import VQVAE
+from model.ddpm import Diffusion as DDPMDiffusion
+from utils.wandb import WandbManager
+from utils.config import load_config
+from dataset import HolographyImageFolder
+
+
+def validate(config_path, model=None, vae=None, diffusion=None, model_ckpt=None):
+
+    global dataloader_val
+
+    config = load_config(config_path)
+    dataset_config = config['dataset_params']
+    ddpm_model_config = config['ddpm_params']
+    autoencoder_model_config = config['autoencoder_params']
+    train_config = config['ldm_train_params']
+    inference_config = config["ddpm_inference_params"]
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    ###################################### data ######################################
+    if not "dataloader_val" in globals():
+        transforms_list = []
+
+        transforms_list.append(torchvision.transforms.ToTensor())
+
+        if dataset_config.get("img_interpolation"):
+            transforms_list.append(torchvision.transforms.Resize((dataset_config["img_interpolation"], 
+                                                                dataset_config["img_interpolation"]),
+                                                                interpolation = torchvision.transforms.InterpolationMode.BILINEAR))
+
+        transforms_list.append(torchvision.transforms.Normalize((0.5) * dataset_config["img_channels"], 
+                                                                (0.5) * dataset_config["img_channels"]))
+
+        transforms = torchvision.transforms.Compose(transforms_list)
+
+        # dataset
+        dataset_val = HolographyImageFolder(root=dataset_config["img_path"], 
+                                    transform=transforms, 
+                                    pkl_path=dataset_config["pkl_path_val"])
+
+        # dataloader
+        dataloader_val = DataLoader(dataset_val,
+                                batch_size=train_config['ldm_batch_size'],
+                                shuffle=False)
+    
+    ################################## autoencoder ###################################
+    # Load Autoencoder
+    if vae is None: 
+        vae = VQVAE(img_channels=dataset_config['img_channels'], config=autoencoder_model_config).to(device)
+
+        vae_ckpt_path = os.path.join(train_config['task_name'],
+                                     train_config['vqvae_ckpt_dir'],
+                                     train_config['vqvae_ckpt_model']
+                                     )
+
+        vae.load_state_dict(torch.load(vae_ckpt_path, map_location=device))
+        print(f'Loaded autoencoder checkpoint from {vae_ckpt_path}')
+
+        for param in vae.parameters():
+            param.requires_grad = False
+    
+    vae.eval()
+
+    ##################################### u-net ######################################
+    # Load UNet
+    if model is None: 
+        model = UNet(img_channels=autoencoder_model_config['z_channels'], model_config=ddpm_model_config).to(device)
+        
+
+        unet_ckpt_path = os.path.join(train_config['task_name'], 
+                                    train_config['ldm_ckpt_name'], 
+                                    inference_config["ddpm_model_ckpt"]
+                                    )
+        
+        model.load_state_dict(torch.load(unet_ckpt_path, map_location=device))
+        print(f'Loaded unet checkpoint from {unet_ckpt_path}')
+
+    model.eval()
+
+    ################################### diffusion ####################################
+    if diffusion is None:
+        # init diffusion class
+        if dataset_config.get('img_interpolation'):
+            img_size = dataset_config['img_interpolation'] // 2 ** sum(autoencoder_model_config['down_sample'])
+        else:
+            img_size = dataset_config['img_size'] // 2 ** sum(autoencoder_model_config['down_sample'])
+    
+        diffusion = DDPMDiffusion(img_size=img_size, 
+                                img_channels=autoencoder_model_config['z_channels'],
+                                noise_schedule="linear", 
+                                beta_start=train_config["ldm_beta_start"], 
+                                beta_end=train_config["ldm_beta_end"],
+                                device=device,
+                                )
+
+    # define criterions for evaluation
+    criterion = torch.nn.MSELoss()
+
+    reconstruction_losses = []
+ 
+    for (im, _, _) in dataloader_val:
+
+        with torch.no_grad():
+
+            im = im.float().to(device)
+
+            # condition = context_encoder.encode()
+            # condition = condition.to(device)
+            # TODO
+            condition = None
+
+            # randomly discard conditioning to train unconditionally if conditional training
+            if train_config.get("condition_config") is not None or np.random.random() < train_config["ldm_cfg_discard_prob"]:
+                condition = None
+
+            # autencode samples
+            im, _ = vae.encode(im)
+
+            # sample timestep
+            t = diffusion.sample_timesteps(im.shape[0]).to(device)
+
+            # noise image
+            x_t, noise, x_t_neg_1 = diffusion.noise_images(im, t, x_t_neg_1=True)
+
+            # predict noise
+            noise_pred = model(x_t, t, condition)
+
+            # create image less noisy
+            x_t_neg_1_pred = diffusion.denoising_step(x_t, t, noise_pred)
+
+            # reconstruction loss
+            rec_loss = criterion(noise_pred, noise)
+            reconstruction_losses.append(rec_loss.item())  
+ 
+    logs = {"val_epoch_reconstructon_loss" : np.mean(reconstruction_losses)}
+
+    model.train()
+    vae.train()
+
+    return logs
+
+
+if __name__ == "__main__":
+    
+    parser = argparse.ArgumentParser(description='Arguments for ldm validation')
+    parser.add_argument('--config', dest='config_path',
+                        default='config/ldm_config.yaml', type=str)
+    args = parser.parse_args()
+
+    validate(args.config_path)

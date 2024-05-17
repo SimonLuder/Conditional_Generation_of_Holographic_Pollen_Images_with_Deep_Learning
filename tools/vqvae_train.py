@@ -1,7 +1,7 @@
 import os
 import sys
 import time
-import lpips
+# import lpips
 import shutil
 import random
 import argparse
@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 # from torchvision.datasets import ImageFolder
 import torchvision
 from torchvision.utils import make_grid
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPIPS
 
 # add parent dir to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -39,18 +40,19 @@ def train(config_path):
     config = load_config(config_path)
     model_config = config["autoencoder_params"]
     dataset_config = config["dataset_params"]
-    train_config = config["train_params"]
+    train_config = config["vqvae_train_params"]
+
+    train_with_discriminator = train_config['discriminator_weight'] > 0
 
     # create checkpoints and sample paths
     Path(os.path.join(train_config["task_name"], train_config['vqvae_autoencoder_ckpt_name'])).mkdir(parents=True, exist_ok=True)   
     Path(os.path.join(train_config["task_name"], train_config['vqvae_discriminator_ckpt_name'])).mkdir( parents=True, exist_ok=True)
-    Path(os.path.join(train_config["task_name"], 'vqvae_autoencoder_samples')).mkdir( parents=True, exist_ok=True)
+    Path(os.path.join(train_config["task_name"], train_config["vqvae_autoencoder_ckpt_name"], 'samples')).mkdir( parents=True, exist_ok=True)
 
     # copy config to checkpoint folder
-    shutil.copyfile(config_path, 
-                    os.path.join(train_config['task_name'], 
-                                 train_config['ldm_ckpt_name'], 
-                                 os.path.basename(config_path)))
+    shutil.copyfile(config_path, os.path.join(train_config['task_name'], 
+                                              train_config['vqvae_autoencoder_ckpt_name'], 
+                                              os.path.basename(config_path)))
 
     # setup WandbManager
     wandb_manager = WandbManager(project="MSE_P8", run_name=train_config['vqvae_autoencoder_ckpt_name'] + "_vqvae", config=config)
@@ -90,34 +92,33 @@ def train(config_path):
                             batch_size=train_config['autoencoder_batch_size'],
                             shuffle=True)
     
-    # L1/L2 loss for Reconstruction
-    mse_loss = torch.nn.MSELoss()
-
-    # Discriminator loss
-    loss_functions = {"MSELoss" : nn.MSELoss,
-                      "BCEWithLogits" : nn.BCEWithLogitsLoss,
-                      }.get(train_config["discriminator_loss"])
-    discriminator_loss = loss_functions()
-
     # VAE model
     model = VQVAE(img_channels=dataset_config["img_channels"], 
                   config=model_config).to(device)
     
-    # Discriminator model
-    discriminator = PatchGanDiscriminator(img_channels=dataset_config['img_channels']).to(device)
-    # No need to freeze lpips as lpips.py takes care of that
-    # lpips_model = LPIPS().eval().to(device)
-    lpips_model = lpips.LPIPS(net='alex').to(device)
-
-    # load optimizers
     optimizer_g = Adam(model.parameters(), lr=train_config['autoencoder_lr'], betas=(0.5, 0.999))
-    optimizer_d = Adam(discriminator.parameters(), lr=train_config['autoencoder_lr'], betas=(0.5, 0.999))
+    
+    # Discriminator model
+    if train_with_discriminator:
+        discriminator = PatchGanDiscriminator(img_channels=dataset_config['img_channels']).to(device)
+
+        optimizer_d = Adam(discriminator.parameters(), lr=train_config['autoencoder_lr'], betas=(0.5, 0.999))
+
+        loss_functions = {"MSELoss" : nn.MSELoss, 
+                          "BCEWithLogits" : nn.BCEWithLogitsLoss,}.get(
+                              train_config["discriminator_loss"])
+        discriminator_loss = loss_functions()
+
+        discriminator_start_step = train_config["discriminator_start_step"] # start discriminator after n batches
+
+    # LPIPS perceptual loss
+    lpips_model = LPIPS(net_type='alex').to(device)
+
+    # L1/L2 loss for Reconstruction
+    mse_loss = torch.nn.MSELoss()
 
     # optimize every n steps (for large badges)
     steps_per_optimization = train_config['autoencoder_steps_per_optimization']
-
-    # start discriminator after n batches
-    discriminator_start_step = train_config["discriminator_start_step"]
 
     # save batch every n steps
     image_save_steps = train_config["autoencoder_img_save_steps"]
@@ -152,8 +153,9 @@ def train(config_path):
                 grid = make_grid(torch.cat([save_input, save_output], dim=0), nrow=sample_size)
                 img = torchvision.transforms.ToPILImage()(grid)
 
-                
-                img.save(os.path.join(train_config["task_name"],'vqvae_autoencoder_samples',
+                img.save(os.path.join(train_config["task_name"], 
+                                      train_config["vqvae_autoencoder_ckpt_name"], 
+                                      'samples',
                                       f'sample_{epoch_idx+1}_{step_count}.png'))
                 img_save_count += 1
                 img.close()
@@ -171,12 +173,19 @@ def train(config_path):
             codebook_losses.append(train_config['codebook_weight'] * quantize_losses['codebook_loss'].item())
 
             # lpips loss
-            lpips_loss = train_config['perceptual_weight'] * torch.mean(lpips_model(output, im))
+            im_lpips = torch.clamp(im, -1., 1.)
+            out_lpips = torch.clamp(output, -1., 1.)
+
+            if im_lpips.shape[1] == 1:
+                im_lpips = im_lpips.repeat(1,3,1,1)
+                out_lpips = out_lpips.repeat(1,3,1,1)
+
+            lpips_loss = train_config['perceptual_weight'] * torch.mean(lpips_model(out_lpips, im_lpips))
             lpips_losses.append(train_config['perceptual_weight'] * lpips_loss.item())
             g_loss += lpips_loss
 
             # discriminator loss (used only from "discriminator_start_step" onwards)
-            if step_count > discriminator_start_step:
+            if step_count > discriminator_start_step and train_with_discriminator:
                 disc_fake_pred = discriminator(output)
                 disc_fake_loss = discriminator_loss(disc_fake_pred,
                                                 torch.ones(disc_fake_pred.shape,
@@ -199,7 +208,7 @@ def train(config_path):
             ##############################################################################
 
             ######################### Discriminator optimization #########################
-            if step_count >= discriminator_start_step:
+            if (step_count >= discriminator_start_step) and train_with_discriminator:
                 fake = output
                 disc_fake_pred = discriminator(fake.detach())
                 disc_real_pred = discriminator(im)
@@ -227,18 +236,41 @@ def train(config_path):
                     optimizer_d.zero_grad()
             ##############################################################################
 
+            ################################ model saving ################################
+            if step_count % train_config["autoencoder_ckpt_steps"] == 0:
+
+                torch.save(model.state_dict(), 
+                           os.path.join(train_config["task_name"],
+                                        train_config['vqvae_autoencoder_ckpt_name'],
+                                        "latest.pth"))
+                torch.save(model.state_dict(), 
+                            os.path.join(train_config["task_name"],
+                                         train_config['vqvae_autoencoder_ckpt_name'],
+                                         f"{step_count}.pth"))
+                
+                if train_with_discriminator:
+
+                    torch.save(discriminator.state_dict(), 
+                           os.path.join(train_config["task_name"],
+                                        train_config['vqvae_discriminator_ckpt_name'],
+                                        "latest.pth"))
+                    
+                    torch.save(discriminator.state_dict(), 
+                            os.path.join(train_config["task_name"],
+                                         train_config['vqvae_discriminator_ckpt_name'],
+                                         f"{step_count}.pth"))
+                    
+            ##############################################################################
+
             ################################# validation #################################
             logs_val = None
-            if step_count % train_config["autoencoder_val_steps"] == 0:
-                logs_val = validate(model, config_path)
+            if (step_count % train_config["autoencoder_val_steps"] == 0) and (step_count >= train_config["autoencoder_val_start"]):
+                logs_val = validate(config_path=config_path, model=model)
             #############################################################################
-
-            step_count += 1
-            pbar.set_postfix(g_loss=g_loss.item())
 
             ################################### logging ##################################
             logs = {"epoch" :               epoch_idx + 1,
-                    "step" :                step_count,
+                    "step" :                step_count + 1,
                     "reconstruction_loss" : rec_loss,
                     "lpips_loss" :          lpips_loss,
                     "codebook_loss" :       quantize_losses["codebook_loss"],
@@ -253,35 +285,13 @@ def train(config_path):
 
             # wandb logging
             wandb_run.log(data=logs)
-
             # train_logs = load_json(train_config["logs"])
             # train_logs.append(logs)
             # save_json(train_logs, train_config["logs"])
             ##############################################################################
 
-            ################################ model saving ################################
-            if step_count % train_config["autoencoder_ckpt_steps"] == 0:
-
-                torch.save(model.state_dict(), 
-                           os.path.join(train_config["task_name"],
-                                        train_config['vqvae_autoencoder_ckpt_name'],
-                                        "latest.pth"))
-                
-                torch.save(discriminator.state_dict(), 
-                           os.path.join(train_config["task_name"],
-                                        train_config['vqvae_discriminator_ckpt_name'],
-                                        "latest.pth"))
-                
-                torch.save(model.state_dict(), 
-                           os.path.join(train_config["task_name"],
-                                        train_config['vqvae_autoencoder_ckpt_name'],
-                                        f"{step_count}.pth"))
-                
-                torch.save(discriminator.state_dict(), 
-                           os.path.join(train_config["task_name"],
-                                        train_config['vqvae_discriminator_ckpt_name'],
-                                        f"{step_count}.pth"))
-            ##############################################################################
+            step_count += 1
+            pbar.set_postfix(g_loss=g_loss.item())
 
         ################################### logging ##################################
         logs = {"epoch" :                     epoch_idx + 1,

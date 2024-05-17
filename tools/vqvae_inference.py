@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 import argparse
 from tqdm import tqdm
 
@@ -26,8 +27,10 @@ def inference(config_file):
 
     dataset_config = config['dataset_params']
     autoencoder_config = config['autoencoder_params']
-    train_config = config['train_params']
+    train_config = config['vqvae_train_params']
     inference_config = config["vqvae_inference_params"]
+
+    Path(os.path.join(train_config['task_name'], train_config['vqvae_autoencoder_ckpt_name'], 'inference')).mkdir(parents=True, exist_ok=True)
 
     # transforms
     transforms_list = []
@@ -78,6 +81,10 @@ def inference(config_file):
         decoded_output = (decoded_output + 1) / 2
         ims = (ims + 1) / 2
 
+        # only select first 3 dimensions of the codebook
+        if encoded_output.shape[1] > 3:
+            encoded_output = encoded_output[:, :3, :, :]
+
         # interpolate encoded output to same size as input
         if inference_config['upscale_latent_dim']:
             encoded_output = F.interpolate(encoded_output, size=(ims.shape[-2], ims.shape[-1]), mode="nearest")
@@ -90,9 +97,12 @@ def inference(config_file):
         decoder_grid = torchvision.transforms.ToPILImage()(decoder_grid)
         input_grid = torchvision.transforms.ToPILImage()(input_grid)
         
-        input_grid.save(os.path.join(train_config['task_name'], 'input_samples.png'))
-        encoder_grid.save(os.path.join(train_config['task_name'], 'encoded_samples.png'))
-        decoder_grid.save(os.path.join(train_config['task_name'], 'reconstructed_samples.png'))
+        input_grid.save(os.path.join(train_config['task_name'], train_config['vqvae_autoencoder_ckpt_name'], 
+                                     'inference', 'input_samples.png'))
+        encoder_grid.save(os.path.join(train_config['task_name'], train_config['vqvae_autoencoder_ckpt_name'], 
+                                       'inference', 'encoded_samples.png'))
+        decoder_grid.save(os.path.join(train_config['task_name'], train_config['vqvae_autoencoder_ckpt_name'], 
+                                       'inference', 'reconstructed_samples.png'))
 
 if __name__ == "__main__":
 
@@ -103,4 +113,4 @@ if __name__ == "__main__":
 
     inference(args.config_path)
 
-
+# python tools/vqvae_inference.py --config holographic_pollen/vqvae_autoencoder_ckpt_512_3/ldm3_config.yaml

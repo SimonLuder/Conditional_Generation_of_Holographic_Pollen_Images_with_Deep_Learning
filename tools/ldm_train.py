@@ -1,15 +1,19 @@
 import os
 import sys
 import time
+import lpips
+import shutil
 import argparse
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
 
 import torch
 import torch.nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 import torchvision
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPIPS
 
 # add parent dir to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -21,7 +25,20 @@ from model.vqvae import VQVAE
 from model.ddpm import Diffusion as DDPMDiffusion
 from utils.wandb import WandbManager
 from utils.config import load_config
+from tools.ldm_validate import validate
 from dataset import HolographyImageFolder
+from model.discriminator import DiffusionPatchGanDiscriminator
+from embedding import ConditionalClassEmbedding
+
+# TODO for testing only. eplace with real encoder later
+class DummyEncoding:
+    def __init__(self, n, batch_size):
+        
+        self.n = n
+        self.batch_size = batch_size
+
+    def encode(self):
+        return torch.randn((self.batch_size, self.n))
 
 
 def train(config_path):
@@ -30,17 +47,28 @@ def train(config_path):
     dataset_config = config['dataset_params']
     ddpm_config = config['ddpm_params']
     autoencoder_model_config = config['autoencoder_params']
-    train_config = config['train_params']
+    train_config = config['ldm_train_params']
 
+    train_with_discriminator = train_config['ldm_discriminator_weight'] > 0
+    train_with_perceptual_loss = train_config['ldm_perceptual_weight'] > 0
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # setup WandbManager
-    wandb_manager = WandbManager(project="MSE_P8", run_name=train_config['task_name'] + "_ldm", config=config)
+    wandb_manager = WandbManager(project="MSE_P8", run_name=train_config['ldm_ckpt_name']  + "_ldm", config=config)
     # init run
     wandb_run = wandb_manager.get_run()
 
-    ################################### transforms ###################################
+    # create checkpoints and sample paths
+    Path(os.path.join(train_config['task_name'], train_config['ldm_ckpt_name'])).mkdir(parents=True, exist_ok=True)  
+    Path(os.path.join(train_config['task_name'], train_config['ldm_discriminator_ckpt_name'])).mkdir(parents=True, exist_ok=True)   
+
+    # copy config to checkpoint folder
+    shutil.copyfile(config_path, os.path.join(train_config['task_name'], 
+                                              train_config['ldm_ckpt_name'], 
+                                              os.path.basename(config_path)))
+
+    ###################################### data ######################################
     transforms_list = []
 
     transforms_list.append(torchvision.transforms.ToTensor())
@@ -55,12 +83,14 @@ def train(config_path):
 
     transforms = torchvision.transforms.Compose(transforms_list)
 
-    ###################################### data ######################################
-
     #dataset
-    dataset = HolographyImageFolder(root=dataset_config["img_path"], transform=transforms)
+    print("Loading Dataset")
+    dataset = HolographyImageFolder(root=dataset_config["img_path"], 
+                                    transform=transforms, 
+                                    pkl_path=dataset_config.get("pkl_path_train"))
 
     # dataloader
+    print("Initialize Dataloader")
     dataloader = DataLoader(dataset,
                             batch_size=train_config['ldm_batch_size'],
                             shuffle=True)
@@ -78,54 +108,92 @@ def train(config_path):
         vae = VQVAE(img_channels=dataset_config['img_channels'], config=autoencoder_model_config).to(device)
         vae.eval()
 
-        # Load vae if found
+        # vae_path
         vae_ckpt_path = os.path.join(train_config['task_name'],
-                                     train_config['vqvae_autoencoder_ckpt_name'],
-                                     "latest.pth"
+                                     train_config['vqvae_ckpt_dir'],
+                                     train_config['vqvae_ckpt_model']
                                      )
         
-        if os.path.exists(vae_ckpt_path):
-
-            vae.load_state_dict(torch.load(vae_ckpt_path, map_location=device))
-            print('Loaded autoencoder checkpoint')
-
+        vae.load_state_dict(torch.load(vae_ckpt_path, map_location=device))
+        print('Loaded autoencoder checkpoint')
         
         for param in vae.parameters():
             param.requires_grad = False
     ##################################################################################
 
-    # Load UNet
-    model = UNet(img_channels=autoencoder_model_config['z_channels'],
-                 model_config=ddpm_config).to(device)
+    # Load context encoder
+    # context_encoder = DummyEncoding(n=512, batch_size=train_config['ldm_batch_size'])
+    num_classes = len(dataset.class_labels)
+    context_encoder = ConditionalClassEmbedding(num_embeddings=num_classes, 
+                                                embedding_dim=10, 
+                                                out_dim=ddpm_config['cond_emb_dim'])
+
+    # UNet
+    model = UNet(img_channels=autoencoder_model_config['z_channels'], 
+                 model_config=ddpm_config,
+                 context_encoder=context_encoder).to(device)
     model.train()
+
+    optimizer = Adam(model.parameters(), lr=train_config['ldm_lr'])
+    criterion = torch.nn.MSELoss()
+
+    # Discriminator model
+    if train_with_discriminator:
+
+        discriminator = DiffusionPatchGanDiscriminator(img_channels=autoencoder_model_config['z_channels']).to(device)
+        discriminator.train()
+
+        optimizer_d = Adam(discriminator.parameters(), lr=train_config['ldm_disc_lr'])
+        # d_criterion = torch.nn.MSELoss()
+        loss_functions = {"MSELoss" : torch.nn.MSELoss, 
+                          "BCEWithLogits" : torch.nn.BCEWithLogitsLoss,}.get(
+                              train_config["ldm_discriminator_loss"])
+        d_criterion = loss_functions()
+
+    discriminator_start_step = train_config["ldm_discriminator_start_step"] # starts discriminator after n batches
     
     # Load Diffusion Process
-    input_dummy = torch.zeros(next(iter(dataset))[0].shape).unsqueeze(0).to(device)
-    output_dummy, _ = vae.encode(input_dummy)
-    ddpm_input_size = output_dummy.shape[-1]
+    if dataset_config.get('img_interpolation'):
+        img_size = dataset_config['img_interpolation'] // 2 ** sum(autoencoder_model_config['down_sample'])
+    else:
+        img_size = dataset_config['img_size'] // 2 ** sum(autoencoder_model_config['down_sample'])
     
-    diffusion = DDPMDiffusion(img_size=ddpm_input_size, 
+    diffusion = DDPMDiffusion(img_size=img_size, 
                               img_channels=autoencoder_model_config['z_channels'],
                               noise_schedule="linear", 
                               beta_start=train_config["ldm_beta_start"], 
                               beta_end=train_config["ldm_beta_end"],
                               device=device,
                               )
+    
+    # lpips
+    if train_with_perceptual_loss:
+        # lpips_model = lpips.LPIPS(net='alex').to(device)
+        lpips_model = LPIPS(net_type='alex').to(device)
 
     num_epochs = train_config['ldm_epochs']
-    optimizer = Adam(model.parameters(), lr=train_config['ldm_lr'])
-    criterion = torch.nn.MSELoss()
+    steps_per_optimization = train_config['ldm_steps_per_optimization']
     step_count = 0
+
+    print(f"Start training with \nperceptual loss: {train_with_perceptual_loss} \ndiscriminator: {train_with_perceptual_loss}")
 
     for epoch_idx in range(num_epochs):
         losses = []
+        d_losses = []
+        lpips_losses = []
 
         pbar = tqdm(dataloader)
-        for (im, _, _) in pbar:
-
-            optimizer.zero_grad()
+        for (im, condition, _) in pbar:
     
             im = im.float().to(device)
+            condition = condition.int().to(device)
+
+            # condition = context_encoder.encode(condition)
+            # condition = condition.to(device)
+
+            # randomly discard conditioning to train unconditionally if conditional training
+            if train_config.get("condition_config") is not None or np.random.random() < train_config["ldm_cfg_discard_prob"]:
+                condition = None
 
             # autencode samples
             if not latents_available:
@@ -136,45 +204,148 @@ def train(config_path):
             t = diffusion.sample_timesteps(im.shape[0]).to(device)
 
             # noise image
-            x_t, noise = diffusion.noise_images(im, t)
+            x_t, noise, x_t_neg_1 = diffusion.noise_images(im, t, x_t_neg_1=True)
 
             # predict noise
-            noise_pred = model(x_t, t)
-            
+            noise_pred = model(x_t, t, condition)
+
+            # create image less noisy
+            x_t_neg_1_pred = diffusion.denoising_step(x_t, t, noise_pred)
+
+            # reconstruction loss
             loss = criterion(noise_pred, noise)
-
-            losses.append(loss.item())
-            loss.backward()
-            optimizer.step()
-
-            pbar.set_postfix(Loss=loss)
-            step_count += 1
 
             logs = {"epoch" :               epoch_idx + 1,
                     "step" :                step_count + 1,
-                    "loss" :                np.mean(losses),
+                    "loss" :                np.mean(loss.item()),
                     }
+
+            # # lpips loss
+            # if train_with_perceptual_loss:
+            #     lpips_loss = train_config['ldm_perceptual_weight'] * torch.mean(lpips_model(x_t_neg_1_pred, x_t_neg_1))
+            #     lpips_losses.append(train_config['ldm_perceptual_weight'] * lpips_loss.item())
+            #     loss += lpips_loss
+            #     logs["lpips_loss"] = lpips_loss
+
+            # lpips loss
+            if train_with_perceptual_loss:
+                lpips_in = torch.clamp(x_t_neg_1, -1., 1.)
+                lpips_in_pred = torch.clamp(x_t_neg_1_pred, -1., 1.)
+
+                if lpips_in.shape[1] == 1:
+                    lpips_in = lpips_in.repeat(1,3,1,1)
+                    lpips_in_pred = lpips_in_pred.repeat(1,3,1,1)
+
+                if lpips_in.shape[1] != 3:
+                    lpips_loss = 0
+                    for i in range(lpips_in.shape[1]):
+                        lpips_in_slice = lpips_in[:, i, :, :].unsqueeze(1).repeat(1,3,1,1)
+                        lpips_in_pred_slice = lpips_in_pred[:, i, :, :].unsqueeze(1).repeat(1,3,1,1)
+                        lpips_loss += train_config['ldm_perceptual_weight'] * torch.mean(lpips_model(lpips_in_pred_slice, lpips_in_slice))
+                    lpips_loss = lpips_loss / lpips_in.shape[1]
+                else:
+                    lpips_loss = train_config['ldm_perceptual_weight'] * torch.mean(lpips_model(lpips_in_pred, lpips_in))
+
+                loss += lpips_loss
+
+                logs["lpips_loss"] = lpips_loss
+
+                lpips_losses.append(train_config['ldm_perceptual_weight'] * lpips_loss.item())
+
+            # discriminator loss (used only from "discriminator_start_step" onwards)
+            if (step_count > discriminator_start_step) and train_with_discriminator:
+                disc_fake_pred = discriminator(x_t_neg_1_pred, t)
+                disc_fake_loss = d_criterion(disc_fake_pred, torch.ones(disc_fake_pred.shape,
+                                                                        device=disc_fake_pred.device))
+                loss += train_config['ldm_discriminator_weight'] * disc_fake_loss
+
+            logs["g_loss"] = loss
+            losses.append(loss.item())
+
+            loss = loss / steps_per_optimization
+
+            loss.backward()
+
+            # generator optimization step
+            if (step_count % steps_per_optimization == 0) or (step_count == (len(dataloader) - 1)):
+                optimizer.step()
+                optimizer.zero_grad()
+
+            ######################## discriminator ########################
             
+            if (step_count >= discriminator_start_step) and train_with_discriminator:
+
+                disc_fake_pred = discriminator(x_t_neg_1_pred.detach(), t)
+                disc_real_pred = discriminator(x_t_neg_1, t)
+
+                disc_fake_loss = d_criterion(disc_fake_pred, torch.zeros(disc_fake_pred.shape,
+                                                                         device=disc_fake_pred.device))
+                
+                disc_real_loss = d_criterion(disc_real_pred, torch.ones(disc_real_pred.shape,
+                                                                        device=disc_real_pred.device))
+                
+                d_loss = train_config['ldm_discriminator_weight'] * (disc_fake_loss + disc_real_loss) / 2
+
+                d_losses.append(d_loss.item())
+                logs["d_loss"] = np.mean(d_loss.item())
+
+                # average per step
+                d_loss = d_loss / steps_per_optimization
+
+                # discriminator backpropagation
+                d_loss.backward()
+
+                # discriminator optimization step
+                if (step_count % steps_per_optimization == 0) or (step_count == (len(dataloader) - 1)):
+                    optimizer_d.step()
+                    optimizer_d.zero_grad()
+
+                ###############################################################
+
+            ################################# validation #################################
+            logs_val = None
+            if (step_count % train_config["ldm_val_steps"] == 0) and (step_count >= train_config["ldm_val_start"]):
+                logs_val = validate(config_path=config_path, model=model, vae=vae, diffusion=diffusion)
+            #############################################################################
+
+            pbar.set_postfix(Loss=loss.item())
+            step_count += 1
+
+            if logs_val is not None:
+                logs.update(logs_val)
+
             # wandb logging
             wandb_run.log(data=logs)
-        
-        ################################ model saving ################################
-        if step_count % train_config["ldm_ckpt_steps"] == 0:
 
-            torch.save(model.state_dict(), os.path.join(train_config['task_name'],
-                                                        train_config['ldm_ckpt_name'],
-                                                        "latest.pth"))
-                    
-            torch.save(model.state_dict(), os.path.join(train_config['task_name'],
-                                                        train_config['ldm_ckpt_name'],
-                                                        f"{step_count}.pth"))
+            
+
+            ################################ model saving ################################
+            if step_count % train_config["ldm_ckpt_steps"] == 0:
+
+                torch.save(model.state_dict(), os.path.join(train_config['task_name'],
+                                                            train_config['ldm_ckpt_name'],
+                                                            "latest.pth"))
+                        
+                torch.save(model.state_dict(), os.path.join(train_config['task_name'],
+                                                            train_config['ldm_ckpt_name'],
+                                                            f"{step_count}.pth"))
+                
+                if train_with_discriminator:
+    
+                    torch.save(discriminator.state_dict(), os.path.join(train_config['task_name'],
+                                                                train_config['ldm_discriminator_ckpt_name'],
+                                                                "latest.pth"))
+                            
+                    torch.save(discriminator.state_dict(), os.path.join(train_config['task_name'],
+                                                                train_config['ldm_discriminator_ckpt_name'],
+                                                                f"{step_count}.pth"))
 
 
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Arguments for ddpm training')
     parser.add_argument('--config', dest='config_path',
-                        default='config/vae_config.yaml', type=str)
+                        default='config/ldm_config.yaml', type=str)
     args = parser.parse_args()
 
     train(args.config_path)

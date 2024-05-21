@@ -55,17 +55,39 @@ class Diffusion:
         # Formula: α = 1 - β
         self.alpha = 1. - self.beta
 
-    def noise_images(self, x, t):
+    def noise_images(self, x, t, x_t_neg_1=False):
         sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None, None]
         sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])[:, None, None, None]
         Ɛ = torch.randn_like(x)
+        
+        if x_t_neg_1 is True:
+            sqrt_alpha_hat_neg_1 = torch.sqrt(self.alpha_hat[t - 1])[:, None, None, None]
+            sqrt_one_minus_alpha_hat_neg_1 = torch.sqrt(1 - self.alpha_hat[t - 1])[:, None, None, None]
+            return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * Ɛ, Ɛ, \
+                sqrt_alpha_hat_neg_1 * x + sqrt_one_minus_alpha_hat_neg_1 * Ɛ
+        
         return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * Ɛ, Ɛ
 
     def sample_timesteps(self, n):
         return torch.randint(low=1, high=self.noise_steps, size=(n,))
+    
+    def denoising_step(self, x, t, predicted_noise):
+        alpha = self.alpha[t][:, None, None, None]
+        alpha_hat = self.alpha_hat[t][:, None, None, None]
+        beta = self.beta[t][:, None, None, None]
 
-    def sample(self, model, condition, cfg_scale=3):
-        n = len(condition)
+        t = t.view(-1, 1, 1, 1)
+        
+        if (t > 1).any():  # if any t > 1
+            noise = torch.where(t > 1, torch.randn_like(x), torch.zeros_like(x))
+        else:
+            noise = torch.zeros_like(x)
+        x = 1 / torch.sqrt(alpha) * (x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(beta) * noise
+        return x
+
+    def sample(self, model, condition, n=None, cfg_scale=3, to_uint8=True):
+        if n is None:
+            n = len(condition)
         model.eval()
         with torch.no_grad():
             x = torch.randn((n, self.img_channels, self.img_size, self.img_size)).to(self.device)
@@ -88,7 +110,10 @@ class Diffusion:
                 x = 1 / torch.sqrt(alpha) * (x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(beta) * noise
                 
         model.train()
-        x = (x.clamp(-1, 1) + 1) / 2
-        x = (x * 255).type(torch.uint8)
+
+        if to_uint8:
+            x = (x.clamp(-1, 1) + 1) / 2
+            x = (x * 255).type(torch.uint8)
+
         return x
 

@@ -28,17 +28,7 @@ from utils.config import load_config
 from tools.ldm_validate import validate
 from dataset import HolographyImageFolder
 from model.discriminator import DiffusionPatchGanDiscriminator
-from embedding import ConditionalClassEmbedding
-
-# TODO for testing only. eplace with real encoder later
-class DummyEncoding:
-    def __init__(self, n, batch_size):
-        
-        self.n = n
-        self.batch_size = batch_size
-
-    def encode(self):
-        return torch.randn((self.batch_size, self.n))
+from embedding import ConditionEmbedding
 
 
 def train(config_path):
@@ -84,10 +74,10 @@ def train(config_path):
     transforms = torchvision.transforms.Compose(transforms_list)
 
     #dataset
-    print("Loading Dataset")
     dataset = HolographyImageFolder(root=dataset_config["img_path"], 
                                     transform=transforms, 
-                                    pkl_path=dataset_config.get("pkl_path_train"))
+                                    config=dataset_config,
+                                    labels=dataset_config.get("labels_train"))
 
     # dataloader
     print("Initialize Dataloader")
@@ -119,15 +109,33 @@ def train(config_path):
         
         for param in vae.parameters():
             param.requires_grad = False
-    ##################################################################################
 
+    ############################### context encoding ################################
     # Load context encoder
-    # context_encoder = DummyEncoding(n=512, batch_size=train_config['ldm_batch_size'])
-    num_classes = len(dataset.class_labels)
-    context_encoder = ConditionalClassEmbedding(num_embeddings=num_classes, 
-                                                embedding_dim=10, 
-                                                out_dim=ddpm_config['cond_emb_dim'])
+    if train_config["conditioning"] == "unconditional":
+        print("training unconditional model")
+        context_encoder = None
+    else:
 
+        use_condition = train_config["conditioning"].split("+")
+        print("training conditional model on:", use_condition)
+        num_classes = int(max(dataset.class_labels)) + 1 if "class" in use_condition else None
+        cls_emb_dim = ddpm_config['cond_emb_dim'] + 1 if "class" in use_condition else None
+        tabular_in_dim = len(dataset_config["features"]) if "tabular" in use_condition else None
+        tabular_out_dim = ddpm_config['cond_emb_dim'] if "tabular" in use_condition else None
+
+
+        context_encoder = ConditionEmbedding(out_dim=ddpm_config['time_emb_dim'],
+                                             num_classes=num_classes,
+                                             cls_emb_dim=cls_emb_dim,
+                                             tabular_in_dim=tabular_in_dim,
+                                             tabular_out_dim=tabular_out_dim,
+                                             img_in_channels=None, # TODO add image conditioning to training
+                                             img_out_dim=None
+                                             )
+        # context_encoder.to(device)
+
+    ##################################### u-net ######################################
     # UNet
     model = UNet(img_channels=autoencoder_model_config['z_channels'], 
                  model_config=ddpm_config,
@@ -135,6 +143,7 @@ def train(config_path):
     model.train()
 
     optimizer = Adam(model.parameters(), lr=train_config['ldm_lr'])
+
     criterion = torch.nn.MSELoss()
 
     # Discriminator model
@@ -168,7 +177,6 @@ def train(config_path):
     
     # lpips
     if train_with_perceptual_loss:
-        # lpips_model = lpips.LPIPS(net='alex').to(device)
         lpips_model = LPIPS(net_type='alex').to(device)
 
     num_epochs = train_config['ldm_epochs']
@@ -184,15 +192,13 @@ def train(config_path):
 
         pbar = tqdm(dataloader)
         for (im, condition, _) in pbar:
-    
-            im = im.float().to(device)
-            condition = condition.int().to(device)
 
-            # condition = context_encoder.encode(condition)
-            # condition = condition.to(device)
+            im = im.float().to(device)
+            for cond in use_condition:
+                condition[cond] = condition[cond].to(device)
 
             # randomly discard conditioning to train unconditionally if conditional training
-            if train_config.get("condition_config") is not None or np.random.random() < train_config["ldm_cfg_discard_prob"]:
+            if train_config["conditioning"] == "unconditional" or np.random.random() < train_config["ldm_cfg_discard_prob"]:
                 condition = None
 
             # autencode samples
@@ -220,17 +226,15 @@ def train(config_path):
                     "loss" :                np.mean(loss.item()),
                     }
 
-            # # lpips loss
-            # if train_with_perceptual_loss:
-            #     lpips_loss = train_config['ldm_perceptual_weight'] * torch.mean(lpips_model(x_t_neg_1_pred, x_t_neg_1))
-            #     lpips_losses.append(train_config['ldm_perceptual_weight'] * lpips_loss.item())
-            #     loss += lpips_loss
-            #     logs["lpips_loss"] = lpips_loss
+            # remove all predicted noise
+            im_pred = x_t - noise_pred 
 
             # lpips loss
             if train_with_perceptual_loss:
-                lpips_in = torch.clamp(x_t_neg_1, -1., 1.)
-                lpips_in_pred = torch.clamp(x_t_neg_1_pred, -1., 1.)
+                lpips_in = torch.clamp(im, -1., 1.)
+                lpips_in_pred = torch.clamp(im_pred, -1., 1.)
+                # lpips_in = torch.clamp(x_t_neg_1, -1., 1.)
+                # lpips_in_pred = torch.clamp(x_t_neg_1_pred, -1., 1.)
 
                 if lpips_in.shape[1] == 1:
                     lpips_in = lpips_in.repeat(1,3,1,1)
@@ -241,15 +245,13 @@ def train(config_path):
                     for i in range(lpips_in.shape[1]):
                         lpips_in_slice = lpips_in[:, i, :, :].unsqueeze(1).repeat(1,3,1,1)
                         lpips_in_pred_slice = lpips_in_pred[:, i, :, :].unsqueeze(1).repeat(1,3,1,1)
-                        lpips_loss += train_config['ldm_perceptual_weight'] * torch.mean(lpips_model(lpips_in_pred_slice, lpips_in_slice))
+                        lpips_loss += (train_config['ldm_perceptual_weight'] * torch.mean(lpips_model(lpips_in_pred_slice, lpips_in_slice)))
                     lpips_loss = lpips_loss / lpips_in.shape[1]
                 else:
                     lpips_loss = train_config['ldm_perceptual_weight'] * torch.mean(lpips_model(lpips_in_pred, lpips_in))
 
                 loss += lpips_loss
-
                 logs["lpips_loss"] = lpips_loss
-
                 lpips_losses.append(train_config['ldm_perceptual_weight'] * lpips_loss.item())
 
             # discriminator loss (used only from "discriminator_start_step" onwards)
@@ -316,8 +318,6 @@ def train(config_path):
 
             # wandb logging
             wandb_run.log(data=logs)
-
-            
 
             ################################ model saving ################################
             if step_count % train_config["ldm_ckpt_steps"] == 0:

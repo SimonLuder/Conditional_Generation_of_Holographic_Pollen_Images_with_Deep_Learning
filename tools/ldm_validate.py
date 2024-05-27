@@ -24,6 +24,7 @@ from model.ddpm import Diffusion as DDPMDiffusion
 from utils.wandb import WandbManager
 from utils.config import load_config
 from dataset import HolographyImageFolder
+from embedding import ConditionEmbedding
 
 
 def validate(config_path, model=None, vae=None, diffusion=None, model_ckpt=None):
@@ -57,7 +58,8 @@ def validate(config_path, model=None, vae=None, diffusion=None, model_ckpt=None)
         # dataset
         dataset_val = HolographyImageFolder(root=dataset_config["img_path"], 
                                     transform=transforms, 
-                                    pkl_path=dataset_config["pkl_path_val"])
+                                    config=dataset_config,
+                                    labels=dataset_config.get("labels_val"))
 
         # dataloader
         dataloader_val = DataLoader(dataset_val,
@@ -65,73 +67,94 @@ def validate(config_path, model=None, vae=None, diffusion=None, model_ckpt=None)
                                 shuffle=False)
     
     ################################## autoencoder ###################################
-    # Load Autoencoder
-    if vae is None: 
-        vae = VQVAE(img_channels=dataset_config['img_channels'], config=autoencoder_model_config).to(device)
+    # # Load Autoencoder
+    # if vae is None: 
+    #     vae = VQVAE(img_channels=dataset_config['img_channels'], config=autoencoder_model_config).to(device)
 
-        vae_ckpt_path = os.path.join(train_config['task_name'],
-                                     train_config['vqvae_ckpt_dir'],
-                                     train_config['vqvae_ckpt_model']
-                                     )
+    #     vae_ckpt_path = os.path.join(train_config['task_name'],
+    #                                  train_config['vqvae_ckpt_dir'],
+    #                                  train_config['vqvae_ckpt_model']
+    #                                  )
 
-        vae.load_state_dict(torch.load(vae_ckpt_path, map_location=device))
-        print(f'Loaded autoencoder checkpoint from {vae_ckpt_path}')
+    #     vae.load_state_dict(torch.load(vae_ckpt_path, map_location=device))
+    #     print(f'Loaded autoencoder checkpoint from {vae_ckpt_path}')
 
-        for param in vae.parameters():
-            param.requires_grad = False
+    #     for param in vae.parameters():
+    #         param.requires_grad = False
     
-    vae.eval()
+    # vae.eval()
+
+    ############################### context encoding ################################
+
+    # if train_config["conditioning"] == "unconditional":
+    #     context_encoder = None
+    # else:
+    #     use_condition = train_config["conditioning"].split("+")
+    #     num_classes = int(max(dataset_val.class_labels)) + 1 if "class" in use_condition else None
+    #     cls_emb_dim = ddpm_model_config['cond_emb_dim'] + 1 if "class" in use_condition else None
+    #     tabular_in_dim = len(dataset_config["features"]) if "tabular" in use_condition else None
+    #     tabular_out_dim = ddpm_model_config['cond_emb_dim'] if "tabular" in use_condition else None
+
+    #     context_encoder = ConditionEmbedding(out_dim=ddpm_model_config['time_emb_dim'],
+    #                                          num_classes=num_classes,
+    #                                          cls_emb_dim=cls_emb_dim,
+    #                                          tabular_in_dim=tabular_in_dim,
+    #                                          tabular_out_dim=tabular_out_dim,
+    #                                          img_in_channels=None, # TODO add image conditioning to training
+    #                                          img_out_dim=None
+    #                                          )
+    #     context_encoder.to(device)
 
     ##################################### u-net ######################################
-    # Load UNet
-    if model is None: 
-        model = UNet(img_channels=autoencoder_model_config['z_channels'], model_config=ddpm_model_config).to(device)
+    # # Load UNet
+    # if model is None: 
+    #     model = UNet(img_channels=autoencoder_model_config['z_channels'], 
+    #                  model_config=ddpm_model_config,
+    #                  context_encoder=context_encoder).to(device)
+
         
 
-        unet_ckpt_path = os.path.join(train_config['task_name'], 
-                                    train_config['ldm_ckpt_name'], 
-                                    inference_config["ddpm_model_ckpt"]
-                                    )
+    #     unet_ckpt_path = os.path.join(train_config['task_name'], 
+    #                                 train_config['ldm_ckpt_name'], 
+    #                                 inference_config["ddpm_model_ckpt"]
+    #                                 )
         
-        model.load_state_dict(torch.load(unet_ckpt_path, map_location=device))
-        print(f'Loaded unet checkpoint from {unet_ckpt_path}')
+    #     model.load_state_dict(torch.load(unet_ckpt_path, map_location=device))
+    #     print(f'Loaded unet checkpoint from {unet_ckpt_path}')
 
-    model.eval()
+    # model.eval()
 
     ################################### diffusion ####################################
-    if diffusion is None:
-        # init diffusion class
-        if dataset_config.get('img_interpolation'):
-            img_size = dataset_config['img_interpolation'] // 2 ** sum(autoencoder_model_config['down_sample'])
-        else:
-            img_size = dataset_config['img_size'] // 2 ** sum(autoencoder_model_config['down_sample'])
+    # if diffusion is None:
+    #     # init diffusion class
+    #     if dataset_config.get('img_interpolation'):
+    #         img_size = dataset_config['img_interpolation'] // 2 ** sum(autoencoder_model_config['down_sample'])
+    #     else:
+    #         img_size = dataset_config['img_size'] // 2 ** sum(autoencoder_model_config['down_sample'])
     
-        diffusion = DDPMDiffusion(img_size=img_size, 
-                                img_channels=autoencoder_model_config['z_channels'],
-                                noise_schedule="linear", 
-                                beta_start=train_config["ldm_beta_start"], 
-                                beta_end=train_config["ldm_beta_end"],
-                                device=device,
-                                )
+    #     diffusion = DDPMDiffusion(img_size=img_size, 
+    #                             img_channels=autoencoder_model_config['z_channels'],
+    #                             noise_schedule="linear", 
+    #                             beta_start=train_config["ldm_beta_start"], 
+    #                             beta_end=train_config["ldm_beta_end"],
+    #                             device=device,
+    #                             )
 
     # define criterions for evaluation
     criterion = torch.nn.MSELoss()
 
     reconstruction_losses = []
  
-    for (im, _, _) in dataloader_val:
+    for (im, condition, _) in dataloader_val:
 
         with torch.no_grad():
-
+            
             im = im.float().to(device)
-
-            # condition = context_encoder.encode()
-            # condition = condition.to(device)
-            # TODO
-            condition = None
+            for key in condition.keys():
+                condition[key] = condition[key].to(device)
 
             # randomly discard conditioning to train unconditionally if conditional training
-            if train_config.get("condition_config") is not None or np.random.random() < train_config["ldm_cfg_discard_prob"]:
+            if train_config["conditioning"] == "unconditional" or np.random.random() < train_config["ldm_cfg_discard_prob"]:
                 condition = None
 
             # autencode samples

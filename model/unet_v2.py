@@ -24,6 +24,7 @@ class UNet(nn.Module):
 
         self.context_encoder = context_encoder
 
+
         # Validating Unet Model configurations
         assert self.mid_channels[0] == self.down_channels[-1]
         assert self.mid_channels[-1] == self.down_channels[-1]
@@ -37,11 +38,6 @@ class UNet(nn.Module):
         self.t_proj = nn.Sequential(nn.Linear(self.t_emb_dim, self.t_emb_dim),
                                     nn.SiLU(),
                                     nn.Linear(self.t_emb_dim, self.t_emb_dim))
-
-        # conditional embedding layers
-        self.cond_proj = nn.Sequential(nn.Linear(self.cond_emb_dim, self.t_emb_dim),
-                                       nn.SiLU(),
-                                       nn.Linear(self.t_emb_dim, self.t_emb_dim))
 
         if self.cond_insert_type == "additive":
             pass
@@ -106,8 +102,7 @@ class UNet(nn.Module):
 
         if cond is not None:
             # context embedding
-            cond = self.context_encoder(cond)
-            cond_emb = self.cond_proj(cond) 
+            cond_emb = self.context_encoder(cond)
 
             if self.cond_insert_type == "additive":
                 t_emb += cond_emb

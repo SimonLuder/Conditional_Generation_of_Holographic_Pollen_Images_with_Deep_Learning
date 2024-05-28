@@ -24,7 +24,7 @@ class ConditionalClassEmbedding(nn.Module):
         )
 
     def forward(self, x:torch.Tensor) -> torch.Tensor:
-        emb = self.condEmbedding(x)
+        emb = self.condEmbedding(x.long())
         return emb
     
     
@@ -188,3 +188,70 @@ class CNNImageEmbedding(nn.Module):
         emb = self.fc(x)
         return emb
 
+class ConditionEmbedding(nn.Module):
+
+    def __init__(self, 
+                 out_dim:int, 
+                 num_classes:int=None, 
+                 cls_emb_dim:int=None, 
+                 tabular_in_dim:int=None,
+                 tabular_out_dim:int=None,
+                 img_in_channels:int=None,
+                 img_out_dim:int=None):
+        
+        super(ConditionEmbedding, self).__init__()
+
+        self.use_cls_cond= False
+        self.use_tbl_cond = False
+        self.use_img_cond = False
+
+        if num_classes:
+            self.use_cls_cond= True
+            self.class_emb = nn.Embedding(num_classes, cls_emb_dim)  # class embeddings
+        
+        if tabular_in_dim:
+            self.use_tbl_cond = True
+            self.tabular_emb = nn.Linear(in_features=tabular_in_dim, out_features=tabular_out_dim) # tabular embedding
+
+        if img_in_channels:
+            self.use_img_cond = True
+            # TODO
+            self.image_emb = None
+
+        in_dim = sum(dim for dim in (cls_emb_dim, tabular_out_dim, img_out_dim) if dim is not None)
+        self.fully_connected = nn.Sequential(nn.Linear(in_dim, out_dim), 
+                                             nn.SiLU(), 
+                                             nn.Linear(out_dim, out_dim),
+        )
+
+    def forward(self, x):
+
+        x_cls = x.get("class", None)
+        x_tbl = x.get("tabular", None)
+        x_img = x.get("image", None)
+                
+        if x_cls is not None and self.use_cls_cond:
+            x_cls_emb = self.class_emb(x_cls.long())
+        else:
+            x_cls_emb = None
+
+        if x_tbl is not None and self.use_tbl_cond:
+            x_tbl_emb = self.tabular_emb(x_tbl.float())
+        else:
+            x_tbl_emb = None
+
+        if x_img is not None and self.use_img_cond:
+            x_img_emb = self.image_emb(x_img.float())
+        else:
+            x_img_emb = None
+
+        x = torch.cat([emb for emb in (x_cls_emb, x_tbl_emb, x_img_emb) if emb is not None], dim=-1)
+        x = self.fully_connected(x)
+
+        return x
+
+        # x_cls_emb = self.class_embeddings(x[:, 0].long())
+        # x = torch.cat([x_cls_emb, x[:, 1:]], dim=1)
+        # # Transform features into a feature vector
+        # x = self.feature_embeddings(x)
+        # return x

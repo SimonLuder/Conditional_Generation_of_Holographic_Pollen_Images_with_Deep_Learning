@@ -1,8 +1,10 @@
 import os
 import torch
+import pickle
 import numpy as np
 import pandas as pd
 from PIL import Image
+from pathlib import Path
 from torchvision.datasets import ImageFolder
 from typing import Any, Tuple
 
@@ -127,27 +129,136 @@ class ImageImageDataset(torch.utils.data.Dataset):
 
 class HolographyImageFolder(torch.utils.data.Dataset):
     
-    def __init__(self, root, transform=None):
-        self.root_dir = root
+    def __init__(self, root, transform=None, labels=None, config=None, conditioning=None):
+        self.root = root
         self.transform = transform
+        self.config = config
+        self.labels = labels
+        self.cond_imgs = None
+        self.tabular_features = None
+        self.class_labels = None
 
-        self.samples = []
-        for dirpath, dirnames, filenames in os.walk(self.root_dir):
-            for filename in filenames:
-                if filename.endswith(('.png', '.jpg', '.jpeg')):  # add more extensions as needed
-                    img_path = os.path.join(dirpath, filename)
-                    folder_name = os.path.basename(os.path.dirname(img_path))
-                    self.samples.append((img_path, folder_name, filename))
+        if labels.endswith(".csv") and os.path.exists(labels):
+            print("Loading dataset from csv")
+            self.load_csv_dataset()
+        
+        elif labels.endswith(".pkl") and os.path.exists(labels):
+            print("Loading dataset from pickle")
+            self.load_pickle_dataset()
 
+        else:
+            print("Seach everything. This might take some time.")
+            load_pickle = False
+            save_pickle = False
+            seach_root_dir = False
+
+            if self.labels is None:
+                seach_root_dir = True
+            else:
+                if not os.path.exists(self.labels):
+                    seach_root_dir = True
+                    save_pickle = True
+                else:
+                    load_pickle = True
+
+            foldername_to_id = dict()
+            index = 0
+            if seach_root_dir:
+                # get all images in root and subdirs of root
+                self.samples = []
+                for dirpath, dirnames, filenames in os.walk(self.root):
+                    for filename in filenames:
+                        if filename.endswith(('.png', '.jpg', '.jpeg')):  # add more extensions as needed
+                            img_path = os.path.join(dirpath, filename)
+                            folder_name = os.path.basename(os.path.dirname(img_path))
+                            if folder_name not in foldername_to_id.keys():
+                                foldername_to_id[folder_name] = index
+                                index += 1
+                            self.samples.append((img_path, foldername_to_id[folder_name], filename))
+
+                if save_pickle:
+                    # save samples as pickle
+                    Path(os.path.dirname(os.path.split(self.labels)[-1])).mkdir(parents=True, exist_ok=True)
+                    with open(self.labels, 'wb') as f:
+                        pickle.dump(self.samples, f)
+            
+            if load_pickle:
+                # load samples from pickle file if exists
+                with open(self.labels, 'rb') as f:
+                    self.samples = pickle.load(f)
+   
+    def load_csv_dataset(self):
+        
+        df = pd.read_csv(self.labels)
+        class_cond_colunmn = self.config.get("classes", None)
+        feature_columns = self.config.get("features", None)
+        cond_image_colunmn = self.config.get("cond_img_path", None)
+        filename_column = self.config["filenames"]
+        image_folder = self.config["img_path"]
+
+        filenames = [filename for filename in list(df[filename_column])]
+        img_paths = [os.path.join(image_folder, filename) for filename in filenames]
+        self.samples = list(zip(img_paths, filenames))
+
+        # class features for conditioning
+        if class_cond_colunmn is not None:
+            self.class_labels = df[class_cond_colunmn].values.tolist()
+        else:
+            self.class_labels = None
+
+        # tabular features for conditioning
+        if feature_columns is not None:
+            self.tabular_features = df[feature_columns].values.tolist()
+        else:
+            self.tabular_features = None
+            
+        # images for conditioning
+        if cond_image_colunmn is not None:
+            self.cond_imgs = df[cond_image_colunmn].values.tolist()
+        else:
+            self.cond_imgs = None
+        
+    def load_pickle_dataset(self):
+        # load samples from pickle file if exists
+        with open(self.labels, 'rb') as f:
+            self.samples = pickle.load(f)
+        
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        img_path, folder_name, filename = self.samples[idx]
+
+        # get image
+        img_path, filename = self.samples[idx]
         img = Image.open(img_path)
+
         if img.mode == 'I':
             img = img.convert('I;16')
+            
         img = (np.array(img) / 256).astype('uint8')
+
         if self.transform:
-            img = self.transform(img)
-        return img, folder_name, filename
+            img = self.transform(img)   
+
+        # get conditioning
+        condition = dict()
+
+        if self.class_labels:
+            condition["class"] = self.class_labels[idx]
+
+        if self.tabular_features:
+            tab_cond = self.tabular_features[idx]
+            condition["tabular"] = torch.tensor(tab_cond)
+
+        if self.cond_imgs:
+            cond_image = self.cond_imgs[idx]
+            # TODO Open image as tensor and preprocess
+            # cond_image = torch.flatten(cond_image, start_dim=1)
+            # condition = torch.cat([condition, cond_image], dim=-1)
+            condition["image"] = cond_image
+
+        return img, condition, filename
+
+
+
+

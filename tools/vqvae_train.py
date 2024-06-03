@@ -85,7 +85,8 @@ def train(config_path):
     #dataset
     dataset = HolographyImageFolder(root=dataset_config["img_path"], 
                                     transform=transforms, 
-                                    pkl_path=dataset_config.get("pkl_path_train"))
+                                    config=dataset_config,
+                                    labels=dataset_config.get("labels_train"))
 
     # dataloader
     dataloader = DataLoader(dataset,

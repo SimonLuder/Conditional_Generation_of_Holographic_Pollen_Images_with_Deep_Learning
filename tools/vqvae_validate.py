@@ -63,7 +63,8 @@ def validate(config_path, model=None, model_ckpt=None):
         #dataset
         dataset_val = HolographyImageFolder(root=dataset_config["img_path"], 
                                         transform=transforms, 
-                                        pkl_path=dataset_config.get("pkl_path_val"))
+                                        config=dataset_config,
+                                        labels=dataset_config.get("labels_val"))
 
         # dataloader
         dataloader_val = DataLoader(dataset_val,

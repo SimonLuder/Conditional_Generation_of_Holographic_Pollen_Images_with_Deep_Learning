@@ -56,13 +56,14 @@ def validate(config_file, model=None, model_ckpt=None):
 
     #dataset
     dataset_test = HolographyImageFolder(root=dataset_config["img_path"], 
-                                    transform=transforms, 
-                                    pkl_path=dataset_config.get("pkl_path_test"))
+                                         transform=transforms, 
+                                         config=dataset_config,
+                                         labels=dataset_config.get("labels_test"))
 
     # dataloader
     dataloader_test = DataLoader(dataset_test,
-                            batch_size=1,
-                            shuffle=False)
+                                 batch_size=1,
+                                 shuffle=False)
     
 
     # load pretrained vqvae

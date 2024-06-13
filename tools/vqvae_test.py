@@ -21,10 +21,11 @@ sys.path.append(parent_dir)
 from model.vqvae import VQVAE
 from dataset import HolographyImageFolder
 from utils.config import load_config
+from utils.train_test_utils import save_images_batch, save_json
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def validate(config_file, model=None, model_ckpt=None):
+def test(config_file):
 
     config = load_config(config_file)
 
@@ -33,12 +34,16 @@ def validate(config_file, model=None, model_ckpt=None):
     train_config = config['vqvae_train_params']
     test_config = config["vqvae_test_params"]
 
-    # create checkpoint paths
-    Path(os.path.join(train_config['task_name'], 
-                      train_config['vqvae_autoencoder_ckpt_name']
-                      )).mkdir(parents=True, exist_ok=True)
 
-    
+    images_save_dir = os.path.join(train_config['task_name'], train_config['vqvae_autoencoder_ckpt_name'], "test", "images")
+    log_save_name = os.path.join(train_config['task_name'], train_config['vqvae_autoencoder_ckpt_name'], "test", "test_logs.json")
+
+    # create checkpoint paths
+    Path(images_save_dir).mkdir(parents=True, exist_ok=True)
+    # Path(os.path.join(train_config['task_name'], 
+    #                   train_config['vqvae_autoencoder_ckpt_name']
+    #                   )).mkdir(parents=True, exist_ok=True)
+
     # transforms
     transforms_list = []
 
@@ -95,11 +100,12 @@ def validate(config_file, model=None, model_ckpt=None):
 
             im = im.float().to(device)
 
-            folders.append(folder)
-            sample_filenames.append(filenames)
-
+    
             # autoencoder forward pass
             output, z, quantize_losses = model(im)
+
+            folders.extend(folder)
+            sample_filenames.extend(filenames)
 
             # reconstruction loss
             rec_loss = mse_loss(output, im)
@@ -119,28 +125,34 @@ def validate(config_file, model=None, model_ckpt=None):
             lpips_loss = train_config['perceptual_weight'] * torch.mean(lpips_model(out_lpips, im_lpips))
             lpips_losses.append(train_config['perceptual_weight'] * lpips_loss.item())
 
-    logs = {"test_epoch_reconstructon_loss"    : np.mean(reconstruction_losses),
-            "test_epoch_codebook_loss"         : np.mean(codebook_losses),
-            "test_epoch_lpips_loss"            : np.mean(lpips_losses)
-            }
+            # save images
+            if test_config["save_images"]:
+                output = torch.clamp(output, -1., 1.)
+                output = (output + 1) / 2
+                save_images_batch(output, filenames, save_dir=images_save_dir)
+
+
+        logs = {"test_reconstructon_loss"    : reconstruction_losses,
+                "test_codebook_loss"         : codebook_losses,
+                "test_lpips_loss"            : lpips_losses,
+                "filenames"                  : sample_filenames,
+                }
+        
+        save_json(logs, log_save_name)
+        
+    
             
-    model.train()
-    return logs
+
 
         
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Arguments for vqvae inference')
-    parser.add_argument('--config', dest='config_path',
-                        default='config/ldm_config.yaml', type=str)
+    parser.add_argument('--config', dest='config_path', default='config/ldm_config.yaml', type=str)
     
     args = parser.parse_args()
 
-    validate_ckpts = load_config(args.config_path)["vqvae_validation_params"]["model_ckpts"]
-    
-    for model_ckpt in validate_ckpts:
-        logs = validate(args.config_path, model_ckpt=model_ckpt)
-        logs["step"] = model_ckpt
+    test(args.config_path)
 
     
 

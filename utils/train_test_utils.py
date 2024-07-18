@@ -158,3 +158,18 @@ def load_json(filepath):
         return data_dict
     else:
         return []
+  
+def save_tensors_batch(tensors, filenames, save_dir):
+    for filename, tensor in zip(filenames, tensors):
+        base_name = os.path.splitext(os.path.basename(filename))[0]  # Remove current extension
+        new_filename = os.path.join(save_dir, f'{base_name}.pt')  # Add .pt extension
+        torch.save(tensor, new_filename)
+     
+def load_tensors_batch(save_dir, filenames):
+    loaded_tensors = []
+    for filename in filenames:
+        base_name = os.path.splitext(os.path.basename(filename))[0]  # Remove current extension
+        tensor_path = os.path.join(save_dir, f'{base_name}.pt')  # Add .pt extension
+        tensor = torch.load(tensor_path)
+        loaded_tensors.append(tensor)
+    return loaded_tensors

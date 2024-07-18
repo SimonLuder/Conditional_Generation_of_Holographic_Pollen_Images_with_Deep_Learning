@@ -42,7 +42,7 @@ class UNet(nn.Module):
         if self.cond_insert_type == "additive":
             pass
 
-        elif self.cond_insert_type == "concatenate":
+        elif self.cond_insert_type == "concatenation":
             self.proj_concat_layer = nn.Linear(self.t_emb_dim + self.cond_emb_dim, self.t_emb_dim)
 
         self.downs = nn.ModuleList([])
@@ -107,12 +107,14 @@ class UNet(nn.Module):
             if self.cond_insert_type == "additive":
                 t_emb += cond_emb
 
-            if self.cond_insert_type == "concat":
+            if self.cond_insert_type == "concatenation":
                 t_emb = torch.cat([t_emb, cond_emb], dim=1)
                 t_emb = self.proj_concat_layer(t_emb)
+
         else:
             cond_emb = t_emb
-                
+
+        
         down_outs = []
         for down in self.downs:
             down_outs.append(x)

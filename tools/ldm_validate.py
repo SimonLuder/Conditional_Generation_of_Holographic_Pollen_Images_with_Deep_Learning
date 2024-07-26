@@ -21,10 +21,8 @@ sys.path.append(parent_dir)
 from model.unet_v2 import UNet
 from model.vqvae import VQVAE
 from model.ddpm import Diffusion as DDPMDiffusion
-from utils.wandb import WandbManager
 from utils.config import load_config
 from dataset import HolographyImageFolder
-from embedding import ConditionEmbedding
 
 
 def validate(config_path, model=None, vae=None, diffusion=None, model_ckpt=None):

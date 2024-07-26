@@ -33,6 +33,7 @@ from embedding import ConditionEmbedding
 
 def train(config_path):
 
+    # load configuration
     config = load_config(config_path)
     dataset_config = config['dataset_params']
     ddpm_config = config['ddpm_params']
@@ -42,6 +43,7 @@ def train(config_path):
     train_with_discriminator = train_config['ldm_discriminator_weight'] > 0
     train_with_perceptual_loss = train_config['ldm_perceptual_weight'] > 0
 
+    # train on GPU if it is available else CPU
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # setup WandbManager
@@ -115,25 +117,26 @@ def train(config_path):
     if train_config["conditioning"] == "unconditional":
         print("training unconditional model")
         context_encoder = None
-    else:
 
+    else:
         use_condition = train_config["conditioning"].split("+")
         print("training conditional model on:", use_condition)
         num_classes = int(max(dataset.class_labels)) + 1 if "class" in use_condition else None
-        cls_emb_dim = ddpm_config['cond_emb_dim'] + 1 if "class" in use_condition else None
+        cls_emb_dim = ddpm_config['cls_emb_dim'] + 1 if "class" in use_condition else None
         tabular_in_dim = len(dataset_config["features"]) if "tabular" in use_condition else None
-        tabular_out_dim = ddpm_config['cond_emb_dim'] if "tabular" in use_condition else None
+        tabular_out_dim = ddpm_config['tbl_emb_dim'] if "tabular" in use_condition else None
+        img_out_dim = ddpm_config['img_emb_dim'] if "image" in use_condition else None
 
 
-        context_encoder = ConditionEmbedding(out_dim=ddpm_config['time_emb_dim'],
+        context_encoder = ConditionEmbedding(out_dim=ddpm_config['cond_emb_dim'],
                                              num_classes=num_classes,
                                              cls_emb_dim=cls_emb_dim,
                                              tabular_in_dim=tabular_in_dim,
                                              tabular_out_dim=tabular_out_dim,
                                              img_in_channels=None, # TODO add image conditioning to training
-                                             img_out_dim=None
+                                             img_out_dim=img_out_dim
                                              )
-        # context_encoder.to(device)
+        context_encoder.to(device)
 
     ##################################### u-net ######################################
     # UNet

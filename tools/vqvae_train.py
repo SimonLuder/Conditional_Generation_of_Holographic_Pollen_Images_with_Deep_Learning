@@ -286,9 +286,6 @@ def train(config_path):
 
             # wandb logging
             wandb_run.log(data=logs)
-            # train_logs = load_json(train_config["logs"])
-            # train_logs.append(logs)
-            # save_json(train_logs, train_config["logs"])
             ##############################################################################
 
             step_count += 1
@@ -308,9 +305,6 @@ def train(config_path):
         # wandb logging
         wandb_run.log(data=logs)
 
-        # train_logs = load_json(train_config["logs"])
-        # train_logs.append(logs)
-        # save_json(train_logs, train_config["logs"])
         ##############################################################################
 
             

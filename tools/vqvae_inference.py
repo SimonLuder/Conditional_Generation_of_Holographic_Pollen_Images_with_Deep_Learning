@@ -48,7 +48,10 @@ def inference(config_file):
     transforms = torchvision.transforms.Compose(transforms_list)
 
     #dataset
-    dataset = HolographyImageFolder(root=dataset_config["img_path"], transform=transforms)
+    dataset = HolographyImageFolder(root=dataset_config["img_path"], 
+                                         transform=transforms, 
+                                         config=dataset_config,
+                                         labels=dataset_config.get("labels_test"))
 
     # dataloader
     dataloader = DataLoader(dataset,

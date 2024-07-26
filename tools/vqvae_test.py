@@ -100,7 +100,6 @@ def test(config_file):
 
             im = im.float().to(device)
 
-    
             # autoencoder forward pass
             output, z, quantize_losses = model(im)
 

@@ -57,8 +57,10 @@ wandb/
 artifacts/
 logs/
 runs/
+backup/
 
 # file types
 *.pth
 *.png
 *.jpg
+*.csv

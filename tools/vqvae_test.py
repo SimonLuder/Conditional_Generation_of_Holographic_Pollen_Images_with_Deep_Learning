@@ -121,8 +121,8 @@ def test(config_file):
                 im_lpips = im_lpips.repeat(1,3,1,1)
                 out_lpips = out_lpips.repeat(1,3,1,1)
 
-            lpips_loss = train_config['perceptual_weight'] * torch.mean(lpips_model(out_lpips, im_lpips))
-            lpips_losses.append(train_config['perceptual_weight'] * lpips_loss.item())
+            lpips_loss = torch.mean(lpips_model(out_lpips, im_lpips))
+            lpips_losses.append(lpips_loss.item())
 
             # save images
             if test_config["save_images"]:

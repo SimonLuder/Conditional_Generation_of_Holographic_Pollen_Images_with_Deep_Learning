@@ -201,7 +201,8 @@ class ConditionEmbedding(nn.Module):
         
         super(ConditionEmbedding, self).__init__()
 
-        self.use_cls_cond= False
+        self.out_dim = out_dim
+        self.use_cls_cond = False
         self.use_tbl_cond = False
         self.use_img_cond = False
 
@@ -216,7 +217,8 @@ class ConditionEmbedding(nn.Module):
         if img_in_channels:
             self.use_img_cond = True
             # TODO
-            self.image_emb = None
+            
+            self.image_emb = CLIPImageEmbedding(out_dim=img_out_dim, device="cuda")
 
         in_dim = sum(dim for dim in (cls_emb_dim, tabular_out_dim, img_out_dim) if dim is not None)
         self.fully_connected = nn.Sequential(nn.Linear(in_dim, out_dim), 
@@ -241,7 +243,7 @@ class ConditionEmbedding(nn.Module):
             x_tbl_emb = None
 
         if x_img is not None and self.use_img_cond:
-            x_img_emb = self.image_emb(x_img.float())
+            x_img_emb = self.image_emb(x_img.float().repeat(1,3,1,1)) # TODO
         else:
             x_img_emb = None
 
@@ -250,8 +252,3 @@ class ConditionEmbedding(nn.Module):
 
         return x
 
-        # x_cls_emb = self.class_embeddings(x[:, 0].long())
-        # x = torch.cat([x_cls_emb, x[:, 1:]], dim=1)
-        # # Transform features into a feature vector
-        # x = self.feature_embeddings(x)
-        # return x

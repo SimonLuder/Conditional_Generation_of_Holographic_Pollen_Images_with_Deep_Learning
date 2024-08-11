@@ -233,9 +233,11 @@ class HolographyImageFolder(torch.utils.data.Dataset):
         img = Image.open(img_path)
 
         if img.mode == 'I':
-            img = img.convert('I;16')
-            
-        img = (np.array(img) / 256).astype('uint8')
+            img = img.convert('I;16') 
+            img = (np.array(img) / 256).astype('uint8')
+
+        elif img.mode == 'L':
+            img = np.array(img).astype('uint8')
 
         if self.transform:
             img = self.transform(img)   
@@ -251,14 +253,102 @@ class HolographyImageFolder(torch.utils.data.Dataset):
             condition["tabular"] = torch.tensor(tab_cond)
 
         if self.cond_imgs:
-            cond_image = self.cond_imgs[idx]
-            # TODO Open image as tensor and preprocess
-            # cond_image = torch.flatten(cond_image, start_dim=1)
-            # condition = torch.cat([condition, cond_image], dim=-1)
-            condition["image"] = cond_image
+            # cond_img_path = self.cond_imgs[idx]
+
+            # # temporarly
+            # cond_img = Image.open(cond_img_path)
+
+            # if cond_img.mode == 'I':
+            #     cond_img = cond_img.convert('I;16')
+                
+            # cond_img = (np.array(cond_img) / 256).astype('uint8')
+
+            # # TODO Open image as tensor and preprocess
+ 
+            condition["image"] = img
 
         return img, condition, filename
 
 
+class PairwiseHolographyImageFolder(torch.utils.data.Dataset):
+    
+    def __init__(self, root, transform=None, labels=None, config=None):
+        self.root = root
+        self.transform = transform
+        self.config = config
+        self.labels = labels
+        self.cond_imgs = None
+        self.tabular_features = None
+        self.class_labels = None
 
+        if labels.endswith(".csv") and os.path.exists(labels):
+            print("Loading dataset from csv")
+            self.load_csv_dataset()
+        else:
+            raise ValueError("Only CSV file format is supported for labels.")
+
+    def load_csv_dataset(self):
+        
+        df = pd.read_csv(self.labels)
+        class_cond_colunmn = self.config.get("classes", None)
+        feature_columns = self.config.get("features", None)
+        cond_image_colunmn = self.config.get("cond_img_path", None)
+        filename_column = self.config["filenames"]
+        image_folder = self.config["img_path"]
+        event_id_column = "event_id"
+
+
+        # Group by event_id
+        grouped = df.groupby(event_id_column)
+        self.samples = []
+        self.class_labels = []
+        self.tabular_features = []
+        self.cond_imgs = []
+
+        for event_id, group in grouped:
+            if len(group) != 2:
+                raise ValueError(f"Event ID {event_id} does not have exactly two rows.")
+            
+            filenames = group[filename_column].tolist()
+            img_paths = [os.path.join(image_folder, filename) for filename in filenames]
+            self.samples.append((img_paths, filenames))
+
+            if class_cond_colunmn is not None:
+                self.class_labels.append(group[class_cond_colunmn].tolist())
+            if feature_columns is not None:
+                self.tabular_features.append(group[feature_columns].values.tolist())
+            if cond_image_colunmn is not None:
+                self.cond_imgs.append(group[cond_image_colunmn].tolist())
+        
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        img_paths, filenames = self.samples[idx]
+        imgs = [Image.open(img_path) for img_path in img_paths]
+
+        for i, img in enumerate(imgs):
+            if img.mode == 'I':
+                img = img.convert('I;16') 
+                img = (np.array(img) / 256).astype('uint8')
+            elif img.mode == 'L':
+                img = np.array(img).astype('uint8')
+
+            if self.transform:
+                imgs[i] = self.transform(img)   
+
+        # get conditioning
+        condition = dict()
+
+        if self.class_labels:
+            condition["class"] = self.class_labels[idx]
+
+        if self.tabular_features:
+            tab_cond = self.tabular_features[idx]
+            condition["tabular"] = torch.tensor(tab_cond)
+
+        if self.cond_imgs:
+            condition["image"] = imgs
+
+        return imgs, condition, filenames
 

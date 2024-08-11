@@ -1,0 +1,21 @@
+dataset1_params :
+  img_path: 'data/holographic_pollen/test_images'
+  img_channels : 1
+  img_size : 256
+  img_interpolation : 256
+  classes : class_id
+  filenames : rec_path
+  labels_test : labels_test.csv
+
+dataset2_params :
+  # img_path: 'holographic_pollen/ldm_clstbl_8_512_e5/test/images'
+  img_path: 'holographic_pollen/vqvae_autoencoder_8_8192/test/images'
+  img_channels : 1
+  img_size : 256
+  img_interpolation : 256
+  classes : class_id
+  filenames : rec_path
+  labels_test : labels_test.csv
+
+test_params : 
+  output_dir: holographic_pollen/vqvae_autoencoder_8_8192/test/lpips_scores.pkl

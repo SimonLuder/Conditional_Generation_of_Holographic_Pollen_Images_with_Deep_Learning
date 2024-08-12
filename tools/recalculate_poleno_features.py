@@ -1,10 +1,19 @@
+'''
+This script is used to recalculate the visual features from the pollen objects in the holographic images. 
+
+Two arguments are required for the recalculation:
+
+    - database: path of the poleno_marvel.db file
+    - image_folder: path to the folder containing the holographic images
+
+The default path configuration is setup to run inside the singularity container. To run it localy the two precious paths need to be adapted.
+'''
+
 import os
 import sys
-import cv2
 import sqlite3
-import numpy as np
+import argparse
 import pandas as pd
-from tqdm import tqdm
 
 # add parent dir to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -14,12 +23,16 @@ sys.path.append(parent_dir)
 from utils.data_processing import recalculate_holographic_features
 
 if __name__ == "__main__":
-    
-    # database = 'Z:\marvel\marvel-fhnw\data\Poleno/poleno_marvel.db'
-    # image_folder = 'Z:\marvel\marvel-fhnw\data\Poleno'
 
-    database = '/workspace/data/Poleno/poleno_marvel.db'
-    image_folder = '/workspace/data/Poleno'
+    parser = argparse.ArgumentParser(description='Arguments for resnet training')
+    parser.add_argument('--database', default='/workspace/data/Poleno/poleno_marvel.db', type=str)
+    parser.add_argument('--image_folder', default='/workspace/data/Poleno', type=str)
+    args = parser.parse_args()
+
+    database = args.database
+    image_folder = args.image_folder
+
+    print(database, image_folder)
 
     # Connect to the SQLite database
     conn = sqlite3.connect(database)
@@ -32,10 +45,6 @@ if __name__ == "__main__":
 
     # recalculate features for all images in the dataframe
     computed_data_full_recalc = recalculate_holographic_features(computed_data_full, image_folder)
-
-    # # convert metrics with units in pixel to μm
-    # resolution = get_holo_resolution()
-    # computed_data_full_recalc = data_processing.convert_pixel_to_um(computed_data_full_recalc, resolution)
 
     # save the dataframe
     computed_data_full_recalc.to_csv("computed_data_full_re.csv", index=False)

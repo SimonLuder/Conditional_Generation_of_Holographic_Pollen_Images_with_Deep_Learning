@@ -4,7 +4,7 @@ This repository contains the code for the report: Conditional Generation of Holo
 The project was created as part of the P8 in the Masters of Science in Engineering (MSE) study program at FHNW. The aim of this work was to generate holographic pollen images using a latent diffusion model. The generated images are intended to be used to expand the existing database.
 
 
-![alt text](./images/linear_holo.jpg?raw=true)
+![Generated Samples from the LDM](./images/generated_images.png?raw=true)
 
 
 ## Structure
@@ -62,22 +62,21 @@ The project was created as part of the P8 in the Masters of Science in Engineeri
 
 
 ## Docker
-To run code inside the dockerfile
+To run code inside the dockerfile the follofing steps need to be excecuted.
 
-Build the holo_images docker image from Dockerfile:
+1. Build the holo_images docker image from Dockerfile:
 ``` sh
 docker build -f Dockerfile.slurm -t holo_images .
 ```
 
-Start the holo_images container in bash
+2. Start the holo_images container in bash
 ``` sh
 docker run -it --rm -v .:/app/ --gpus all holo_images bash
 ```
 
-Transform the docker image to .tar file for training on slurm
+3. Transform the docker image to .tar file for training on slurm
 ``` sh
 docker save holo_images > holo_images.tar
-
 ```
 
 ------------

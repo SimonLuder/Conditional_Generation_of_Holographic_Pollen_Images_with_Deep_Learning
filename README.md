@@ -4,7 +4,7 @@ This repository contains the code for the report: Conditional Generation of Holo
 The project was created as part of the P8 in the Masters of Science in Engineering (MSE) study program at FHNW. The aim of this work was to generate holographic pollen images using a latent diffusion model. The generated images are intended to be used to expand the existing database.
 
 
-![Generated Samples from the LDM](./images/generated_images.png?raw=true)
+![Generated Samples from the LDM](./images/generated_images.png?raw=true  "Visualization of six holographic images generated using the best ldm variant.")
 
 
 ## Structure

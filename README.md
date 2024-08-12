@@ -1,7 +1,10 @@
 # Generative_Diffusion_Models_for_3D_Geometric_Objects
 
-This repository contains the code for the project: Generative Diffusion Models for 3D Geometric Objects, 
-The project represents the P7 in the Masters of Science in Engineering (MSE) study program at FHNW.
+This repository contains the code for the report: Conditional Generation of Holographic Pollen Images with Deep Learning. 
+The project was created as part of the P8 in the Masters of Science in Engineering (MSE) study program at FHNW. The aim of this work was to generate holographic pollen images using a latent diffusion model. The generated images are intended to be used to expand the existing database.
+
+
+![alt text](./images/linear_holo.jpg?raw=true)
 
 
 ## Structure
@@ -9,42 +12,45 @@ The project represents the P7 in the Masters of Science in Engineering (MSE) stu
 ```
 ├── README.md                           <- The file you are reading right now
 │
-├── train.py                            <- The main file for training the models
-│
-├── test.py                             <- Code for testing and validating the models during and after training
-│
-├── inference.py                        <- Use this script to generate conditioned new samples with a trained model
-│
-├── noising_test.py                     <- Noise images with this script
+├── config                              <- Contains configuration files to run the models (separate download)
 │
 ├── dataset.py                          <- Contains the dataset classes
 │
-├── embedding.py                        <- Code for the various embedding classes
+├── dockerfile
+│   └── Dockerfile.slurm                <- Dockerfile for training models on slurm     
+│         
+├── embedding.py                        <- Code for the various embedding classes 
 │
-├── data                                <- Place the datasets for training here
+├── holographic_pollen                  <- Containes the trained models, logged metrics and results (separate download)
 │
 ├── model              
-│   ├── ddpm.py                         <- Contains the ddpm model class
-│   ├── modules.py                      <- Contains the module classes for the UNet
-│   └── UNet.py                         <- Contains the UNet class
+│   ├── ddpm.py                         <- Contains the DDPM model class
+│   ├── blocks.py                       <- Contains the basic bbuilding blocks for the models
+│   ├── vqvae.py                        <- Contains the modular VQ-VAE model class
+│   ├── unet_v2.py                      <- Contains the reworked modular UNet model class
+│   └── discriminator.py                <- Contains the PatchGan discriminator model class
 │
 ├── notebooks  
-│   ├── gradient_visualization.ipynb    <- Notebook for visualizing the gradient of an image
-│   ├── report_visualizations.ipynb     <- Notebook with general visualizations for the report
-│   └── results.ipynb                   <- Contains the results from the training for the report
+│   ├── eda_poleno.ipynb                <- Contains code to describe, clean and split the poleno dataset into train, val and test sets.
+│   ├── vqvae_test_results.ipynb        <- Contains the logged metrics from validating and testing the VQ-VAE models
+│   └── ldm_test_results.ipynb          <- Contains the results from the evaluation of the Latent diffusion models
 │
-├── tools                 
-│   ├── reshape_dataset.py              <- Run this script to change the image resolution of a selected dataset
-│   ├── setup_classes.py                <- Run this script to create a conditional class dataset (outdated)
-│   └── subsample_dataset.py            <- Run this script to create a subset of a selected dataset
+├── tools       
+│   ├── recalculate_poleno_features.py  <- Recalculates the visual features for the poleno dataset
+│   ├── vqvae_train.py                  <- To train the VQ-VAE 
+│   ├── vqvae_validate.py               <- Validation loop for the VQ-VAE
+│   ├── vqvae_test.py                   <- Test the VQ-VAE
+│   ├── ldm_train.py                    <- Train the LDM 
+│   ├── ldm_validate.py                 <- Validation loop for the LDM
+│   ├── ldm_test.py                     <- To test the LDM   
+│   ├── siamese_classifier_train.py     <- To train and validate the siamese classifier     
+│   ├── siamese_classifier_test.py      <- To test and the siamese classifier 
+│   └── lpips_test_error.py             <- Recalculates the LPIPS and MSE on the generated images
 │
 ├── utils                    
-│   ├── metrics.py                      <- Contains metrics for evaluation 
 │   ├── train_test_utils.py             <- Contains general utils for training and testing
-│   └── wandb.py                        <- Contains WandB functionalities for logging
-│
-├── dockerfile
-│   └── Dockerfile.slurm                <- Dockerfile for training models on slurm                  
+│   ├── data_processing.py              <- Methods to handle the Poleno dataset
+│   └── wandb.py                        <- Contains WandB functionalities for logging       
 │
 ├── requirements.txt                    <- The requirements file
 │
@@ -56,80 +62,69 @@ The project represents the P7 in the Masters of Science in Engineering (MSE) stu
 
 
 ## Docker
-To train on 
+To run code inside the dockerfile
 
-Build the geoshapes docker image from Dockerfile:
+Build the holo_images docker image from Dockerfile:
 ``` sh
-docker build -f Dockerfile.slurm -t geoshapes .
+docker build -f Dockerfile.slurm -t holo_images .
 ```
 
-Start the geoshapes container in bash
+Start the holo_images container in bash
 ``` sh
-docker run -it --rm -v .:/app/ --gpus all geoshapes bash
+docker run -it --rm -v .:/app/ --gpus all holo_images bash
 ```
 
-Transform the docker image to .tar file
+Transform the docker image to .tar file for training on slurm
 ``` sh
-docker save geoshapes > geoshapes.tar
+docker save holo_images > holo_images.tar
 
 ```
 
 ------------
-## Dataset reshaping
+## Recalculation of the visual features
 
-To create a dataset version with different image sizes, run the reshape_dataset.py script. 
-Note that the config needs to be adapted to train with the alternative image sizes.
+The visual features from the holographic images can be recalculated using the subsequent command.
 
-Train dataset :
 ``` sh
-python reshape_dataset.py --source ./data/train256/ --destination ./data/train64/ --size 64
-python reshape_dataset.py --source ./data/train256/ --destination ./data/train32/ --size 32
+python recalculate_poleno_features.py --database YOUR_PATH/Poleno/poleno_marvel.db --image_folder YOUR_PATH/Poleno/
 ```
 
-Validation dataset :
+## VQ-VAE training and evaluation
+
+VQ-VAE model training and testing can be started using the following commands. The model and training can be customized via the `vqvae_config.yaml` file.
+
+
 ``` sh
-python reshape_dataset.py --source ./data/val256/ --destination ./data/val64/ --size 64
-python reshape_dataset.py --source ./data/val256/ --destination ./data/val32/ --size 32
+# training
+python vqvae_train.py --config config/vqvae_config.yaml
+
+# testing
+python vqvae_test.py --config config/vqvae_config.yaml
 ```
 
-Test dataset :
+## Latent Diffusion Model training and evaluation
+
+
+The Latent Diffusion models can be trained and tested by the following commands. The model and training can be adapted in the the `ldm_config.yaml` file.
+
+
 ``` sh
-python reshape_dataset.py --source ./data/test256/ --destination ./data/test64/ --size 64
-python reshape_dataset.py --source ./data/test256/ --destination ./data/test32/ --size 32
+# training
+python ldm_train.py --config config/ldm_config.yaml
+
+# testing
+python ldm_test.py --config config/ldm_config.yaml
 ```
 
-### slurm
-To train the models on the SLURM cluster, the path of the individual subsets must be further adapted, when creating alternative image sizes in the dataset.
 
-Train dataset :
-``` sh
-python reshape_dataset.py --source ./data/train256/ --destination ./slurm/data/train64/ --size 64 --custom_destination_path /workspace/data/train64/
-python reshape_dataset.py --source ./data/train256/ --destination ./slurm/data/train32/ --size 32 --custom_destination_path /workspace/data/train32/
-```
+## Siamese Classifier training and evaluation
 
-Validation dataset :
-``` sh
-python reshape_dataset.py --source ./data/val256/ --destination ./slurm/data/val64/ --size 64 --custom_destination_path /workspace/data/val64/
-python reshape_dataset.py --source ./data/val256/ --destination ./slurm/data/val32/ --size 32 --custom_destination_path /workspace/data/val32/
-```
+The following commands can be used to train and test the siamese classifier. The training configuration can be modified in the `siamese_classifier_config.yaml` file.
 
-Test dataset :
 ``` sh
-python reshape_dataset.py --source ./data/test256/ --destination ./slurm/data/test64/ --size 64 --custom_destination_path /workspace/data/test64/
-python reshape_dataset.py --source ./data/test256/ --destination ./slurm/data/test32/ --size 32 --custom_destination_path /workspace/data/test32/
-```
-------------
-## Subset generation
-To create a small dataset for training, the subsample_dataset.py script can be executed. This can be executed via the shell with the following commands. 
-Create a subsample of the dataset
-``` sh
-python ./utils/dataset/subsample_dataset.py --source "data/train256/" --n 100
-python ./utils/dataset/subsample_dataset.py --source "data/train64/" --n 100
-python ./utils/dataset/subsample_dataset.py --source "data/train32/" --n 100
-```
+# training
+python siamese_classifier_train.py --config config/siamese_config.yaml
 
-### slurm
-``` sh
-python ./utils/dataset/subsample_dataset.py --source "slurm/data/train256/" --n 100
-python ./utils/dataset/subsample_dataset.py --source "slurm/data/train64/" --n 100
-python ./utils/dataset/subsample_dataset.py --source "slurm/data/train32/" --n 100
+# testing
+python siamese_classifier_test.py --config config/siamese_config.yaml
+```

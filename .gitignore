@@ -51,16 +51,17 @@ data/
 models/
 sd/
 results/
-
-# wandb
 wandb/
 artifacts/
 logs/
 runs/
 backup/
+holographic_pollen/
+
 
 # file types
 *.pth
-*.png
-*.jpg
 *.csv
+
+!assets/images/
+!assets/images/*.png

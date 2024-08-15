@@ -1,11 +1,10 @@
-# Conditional Generation of Holographic Pollen Images with Deep Learning
+# <div align="center">Conditional Generation of Holographic Pollen Images <br/> with Deep Learning</div>
 
 This repository contains the code for the report: Conditional Generation of Holographic Pollen Images with Deep Learning. 
 The project was created as part of the P8 in the Masters of Science in Engineering (MSE) study program at FHNW. The aim of this work was to generate holographic pollen images using a latent diffusion model. The generated images are intended to be used to expand the existing database.
 
-
 ![Generated Samples from the LDM](./images/generated_images.png?raw=true  "Visualization of six holographic images generated using the best ldm variant.")
-
+<div align="center">Six generated images from the LDM showing various pollen types</div>
 
 ## Structure
 ------------

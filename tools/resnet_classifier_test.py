@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import numpy as np
+from tqdm import tqdm
 from pathlib import Path
 
 import torch
@@ -17,6 +18,7 @@ sys.path.append(parent_dir)
 from utils.config import load_config
 from dataset import HolographyImageFolder
 
+
 def test(config_path):
     try:
         # Device configuration
@@ -29,14 +31,15 @@ def test(config_path):
         test_config = config["testing"]
 
         # create checkpoint directory
-        Path(os.path.join(test_config["task_name"], test_config["output_dir"])).mkdir(parents=True, exist_ok=True)
+        output_dir = test_config["output_dir"]
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
 
         # Dataset transformations
         transforms_list = [
             transforms.ToTensor(),
             transforms.Resize((dataset_config["img_interpolation"], dataset_config["img_interpolation"]),
                               interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.Normalize([0.5] * dataset_config["img_channels"], [0.5] * dataset_config["img_channels"]),
+            # transforms.Normalize([0.5] * dataset_config["img_channels"], [0.5] * dataset_config["img_channels"]),
             transforms.Lambda(lambda x: x.repeat(3, 1, 1))  # Convert 1 channel to 3 channels
         ]
         transform = transforms.Compose(transforms_list)
@@ -67,19 +70,18 @@ def test(config_path):
         all_preds = []
         
         with torch.no_grad():
-            for inputs, labels, _ in test_loader:
+            for inputs, labels, _ in tqdm(test_loader):
                 labels = labels["class"]
                 inputs, labels = inputs.to(device), labels.to(device)
+                # print(inputs.max(), inputs.min())
                 outputs = model(inputs)
                 _, preds = torch.max(outputs, 1)
                 all_labels.extend(labels.cpu().numpy())
                 all_preds.extend(preds.cpu().numpy())
 
-        # Calculate metrics
-        print("Classification Report:")
-        print(classification_report(all_labels, all_preds))
-        print("Confusion Matrix:")
-        print(confusion_matrix(all_labels, all_preds))
+        # Save the labels and predictions to npy files
+        np.save(os.path.join(output_dir, 'labels.npy'), np.array(all_labels))
+        np.save(os.path.join(output_dir, 'predictions.npy'), np.array(all_preds))
 
     except Exception as e:
         print(f"Error during testing: {e}")
@@ -90,4 +92,4 @@ if __name__ == "__main__":
     parser.add_argument('--config', dest='config_path', default='config/resnet_config.yaml', type=str)
     args = parser.parse_args()
 
-    test(args.config_path, args.model_weights_path)
+    test(args.config_path)

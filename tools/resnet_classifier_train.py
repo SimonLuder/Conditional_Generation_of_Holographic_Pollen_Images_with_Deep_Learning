@@ -4,12 +4,14 @@ import shutil
 import random
 import argparse
 import numpy as np
+import pandas as pd
 from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import models, transforms
+from sklearn.utils.class_weight import compute_class_weight
 
 # add parent dir to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -91,8 +93,15 @@ def train(config_path):
 
     model = model.to(device)
 
+    # Calculate class weights
+    all_labels = list(pd.read_csv(dataset_config["labels_train"])[dataset_config["classes"]])
+    print(all_labels)
+    # all_labels = [label["class"] for _, label, _ in train_loader.dataset]
+    class_weights = compute_class_weight('balanced', classes=np.unique(all_labels), y=all_labels)
+    class_weights = torch.tensor(class_weights, dtype=torch.float).to(device)
+
     # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
     # set seeds
@@ -117,8 +126,6 @@ def train(config_path):
             labels = labels["class"]
             inputs, labels = inputs.to(device), labels.to(device)
 
-            print(labels)
-
             # Zero the parameter gradients
             optimizer.zero_grad()
 
@@ -131,7 +138,7 @@ def train(config_path):
             optimizer.step()
 
             # Log metrics
-            logs = {"epoch": epoch, "step": step_count + 1, "loss": loss.item()}
+            logs = {"epoch": epoch, "step": step_count + 1, "loss": loss.item() / batch_size}
 
             # Validation
             if (step_count + 1) % validation_step == 0:
@@ -139,6 +146,9 @@ def train(config_path):
                 val_loss = 0.0
                 correct = 0
                 total = 0
+                class_correct = [0] * num_out
+                class_total = [0] * num_out
+
 
                 with torch.no_grad():
 
@@ -155,12 +165,27 @@ def train(config_path):
                         total += labels.size(0)
                         correct += (predicted == labels).sum().item()
 
+                        # Calculate per-class metrics
+                        for i in range(len(labels)):
+                            label = labels[i].item()
+                            class_total[label] += 1
+                            if predicted[i] == labels[i]:
+                                class_correct[label] += 1
+
                     val_loss /= len(val_loader)
 
                     logs["val_correct"] = correct
                     logs["val_total"] = total
                     logs["val_accuracy"] = 100 * correct / total
                     logs["val_loss"] = val_loss
+
+                    # Log per-class accuracy
+                    for i in range(num_out):
+                        if class_total[i] > 0:
+                            class_accuracy = 100 * class_correct[i] / class_total[i]
+                        else:
+                            class_accuracy = 0  # Avoid division by zero
+                        logs[f"class_{i}_accuracy"] = class_accuracy
 
             # log loss to wandb
             wandb_run.log(data=logs)
